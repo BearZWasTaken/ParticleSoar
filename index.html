@@ -1,0 +1,1367 @@
+<div id="app">
+  <canvas id="scene" aria-label="ParticleSoar visual demo"></canvas>
+  <div class="hud">
+    <div class="brand">
+      <span class="mark"></span>
+      <div>
+        <div class="title">ParticleSoar</div>
+        <div class="subtitle">visual prototype</div>
+      </div>
+    </div>
+    <div class="meters">
+      <div><span>camera</span><strong id="camera-mode">free</strong></div>
+      <div><span>notes</span><strong>mock</strong></div>
+      <div><span>logic</span><strong>off</strong></div>
+    </div>
+  </div>
+  <div class="legend" aria-hidden="true">
+    <span class="dot middle"></span><span>middle</span>
+    <span class="dot left"></span><span>left</span>
+    <span class="dot right"></span><span>right</span>
+  </div>
+  <div class="camera-debug" aria-hidden="true">
+    <div>pos <span id="camera-position">0, 0, 0</span></div>
+    <div>target <span id="camera-target">0, 0, 0</span></div>
+    <div>fov <span id="camera-fov">44</span></div>
+  </div>
+</div>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+  }
+}
+</script>
+
+<script type="module">
+import * as THREE from "three";
+import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+import { EffectComposer } from "three/addons/postprocessing/EffectComposer.js";
+import { RenderPass } from "three/addons/postprocessing/RenderPass.js";
+import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js";
+
+const canvas = document.getElementById("scene");
+const cameraModeReadout = document.getElementById("camera-mode");
+const cameraPositionReadout = document.getElementById("camera-position");
+const cameraTargetReadout = document.getElementById("camera-target");
+const cameraFovReadout = document.getElementById("camera-fov");
+const renderer = new THREE.WebGLRenderer({
+  canvas,
+  antialias: true,
+  alpha: false,
+  powerPreference: "high-performance"
+});
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.75));
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.08;
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x04070d);
+scene.fog = new THREE.FogExp2(0x050914, 0.035);
+
+const cameraProfile = {
+  fov: 44,
+  near: 0.1,
+  far: 140,
+  position: new THREE.Vector3(0, 0, 42),
+  lookAt: new THREE.Vector3(0, 0, 0),
+  swayX: 0,
+  bobY: 0
+};
+
+const camera = new THREE.PerspectiveCamera(
+  cameraProfile.fov,
+  window.innerWidth / window.innerHeight,
+  cameraProfile.near,
+  cameraProfile.far
+);
+
+const cameraMount = {
+  configured: false,
+  referenceReceiverPosition: new THREE.Vector3(0, -10, 0),
+  initialReceiverQuaternion: new THREE.Quaternion(),
+  inverseInitialReceiverQuaternion: new THREE.Quaternion()
+};
+
+function applyCameraProfile(
+  t = 0,
+  bob = 0,
+  anchor = new THREE.Vector3(),
+  orientation = new THREE.Quaternion(),
+  offset = {}
+) {
+  camera.fov = cameraProfile.fov;
+  camera.near = cameraProfile.near;
+  camera.far = cameraProfile.far;
+  if (offset.fov) camera.fov += offset.fov;
+
+  const localPosition = cameraProfile.position.clone().add(new THREE.Vector3(
+    (offset.x ?? 0) + Math.sin(t * 0.16) * cameraProfile.swayX,
+    (offset.y ?? 0) + bob * cameraProfile.bobY,
+    offset.z ?? 0
+  ));
+  const localTarget = cameraProfile.lookAt.clone().add(new THREE.Vector3(
+    offset.targetX ?? 0,
+    offset.targetY ?? 0,
+    offset.targetZ ?? 0
+  ));
+  const followPosition = cameraMount.configured
+    ? localPosition
+      .sub(cameraMount.referenceReceiverPosition)
+      .applyQuaternion(cameraMount.inverseInitialReceiverQuaternion)
+    : localPosition;
+  const followTarget = cameraMount.configured
+    ? localTarget
+      .sub(cameraMount.referenceReceiverPosition)
+      .applyQuaternion(cameraMount.inverseInitialReceiverQuaternion)
+    : localTarget;
+  const worldPosition = anchor.clone().add(followPosition.applyQuaternion(orientation));
+  const worldTarget = anchor.clone().add(followTarget.applyQuaternion(orientation));
+
+  camera.position.copy(worldPosition);
+  camera.lookAt(worldTarget);
+  camera.updateProjectionMatrix();
+  return worldTarget;
+}
+
+applyCameraProfile();
+
+let debugFreeCamera = true;
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enabled = debugFreeCamera;
+controls.enableDamping = true;
+controls.dampingFactor = 0.08;
+controls.screenSpacePanning = true;
+controls.target.copy(cameraProfile.lookAt);
+controls.minDistance = 2;
+controls.maxDistance = 90;
+controls.update();
+
+const composer = new EffectComposer(renderer);
+composer.addPass(new RenderPass(scene, camera));
+const bloom = new UnrealBloomPass(
+  new THREE.Vector2(window.innerWidth, window.innerHeight),
+  1.78,
+  0.94,
+  0.012
+);
+composer.addPass(bloom);
+
+const notesRoot = new THREE.Group();
+const particlesRoot = new THREE.Group();
+scene.add(notesRoot, particlesRoot);
+
+const axesHelper = new THREE.AxesHelper(8);
+scene.add(axesHelper);
+
+function makeAxisLabel(text, color) {
+  const labelCanvas = document.createElement("canvas");
+  labelCanvas.width = 128;
+  labelCanvas.height = 128;
+  const ctx = labelCanvas.getContext("2d");
+  ctx.clearRect(0, 0, labelCanvas.width, labelCanvas.height);
+  ctx.font = "600 72px Arial";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillStyle = color;
+  ctx.shadowColor = color;
+  ctx.shadowBlur = 16;
+  ctx.fillText(text, 64, 64);
+  const texture = new THREE.CanvasTexture(labelCanvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  const sprite = new THREE.Sprite(new THREE.SpriteMaterial({
+    map: texture,
+    transparent: true,
+    depthWrite: false
+  }));
+  sprite.scale.setScalar(0.9);
+  scene.add(sprite);
+  return sprite;
+}
+
+makeAxisLabel("X", "#ff4b4b").position.set(8.7, 0, 0);
+makeAxisLabel("Y", "#52ff68").position.set(0, 8.7, 0);
+makeAxisLabel("Z", "#4f8cff").position.set(0, 0, 8.7);
+
+const palette = {
+  white: new THREE.Color(0xeaf7ff),
+  left: new THREE.Color(0x70dcff),
+  right: new THREE.Color(0xff70aa)
+};
+
+function makeGlowMaterial(color, opacity = 1) {
+  return new THREE.MeshBasicMaterial({
+    color,
+    transparent: opacity < 1,
+    opacity,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+    side: THREE.DoubleSide
+  });
+}
+
+function makeHotGlowMaterial(color, opacity = 1, intensity = 1) {
+  const material = makeGlowMaterial(color, opacity);
+  material.color.multiplyScalar(intensity);
+  return material;
+}
+
+function makeGradientLineMaterial() {
+  return new THREE.ShaderMaterial({
+    transparent: true,
+    depthWrite: false,
+    blending: THREE.AdditiveBlending,
+    side: THREE.DoubleSide,
+    vertexShader: `
+      attribute vec3 lineColor;
+      attribute float lineAlpha;
+      varying vec3 vLineColor;
+      varying float vLineAlpha;
+
+      void main() {
+        vLineColor = lineColor;
+        vLineAlpha = lineAlpha;
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+      }
+    `,
+    fragmentShader: `
+      varying vec3 vLineColor;
+      varying float vLineAlpha;
+
+      void main() {
+        gl_FragColor = vec4(vLineColor, vLineAlpha);
+      }
+    `
+  });
+}
+
+const matMiddle = makeHotGlowMaterial(palette.white, 0.99, 2.18);
+
+const particleCount = 850;
+const particleGeo = new THREE.BufferGeometry();
+const particlePositions = new Float32Array(particleCount * 3);
+const particleSizes = new Float32Array(particleCount);
+for (let i = 0; i < particleCount; i += 1) {
+  const r = 5 + Math.random() * 32;
+  const a = Math.random() * Math.PI * 2;
+  particlePositions[i * 3] = Math.cos(a) * r;
+  particlePositions[i * 3 + 1] = -2 + Math.random() * 17;
+  particlePositions[i * 3 + 2] = Math.sin(a) * r - 5;
+  particleSizes[i] = 0.5 + Math.random();
+}
+particleGeo.setAttribute("position", new THREE.BufferAttribute(particlePositions, 3));
+particleGeo.setAttribute("size", new THREE.BufferAttribute(particleSizes, 1));
+const particles = new THREE.Points(
+  particleGeo,
+  new THREE.PointsMaterial({
+    color: 0xb9e8ff,
+    size: 0.045,
+    transparent: true,
+    opacity: 0.8,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false
+  })
+);
+particlesRoot.add(particles);
+
+const sphereGeo = new THREE.SphereGeometry(0.25, 32, 18);
+const noteHaloGeo = new THREE.SphereGeometry(0.25, 32, 18);
+const middleHaloScale = 1.62;
+const notes = [];
+const linePool = [];
+const landingHintPool = [];
+
+const timingConfig = {
+  chartDuration: 8.4,
+  flowSpeed: 11.75,
+  postHitSeconds: 0.38
+};
+
+const playfieldConfig = {
+  noteStartY: 20.0,
+  noteHitY: -10.0,
+  receiverRadius: 5.65,
+  zSpread: 0.82,
+  zoneStepX: 8.8
+};
+
+const renderConfig = {
+  pooledConnections: 72,
+  pooledLandingHints: 72,
+  receiverParticles: 46,
+  multiHitLineWidth: 0.063
+};
+
+const chartState = {
+  chart: null,
+  startTime: 0,
+  chartTime: 0,
+  flowSpeedTimeline: null,
+  cameraTimelines: {},
+  receiverEvents: []
+};
+
+const receiverState = {
+  anchor: new THREE.Vector3(0, playfieldConfig.noteHitY, 0),
+  currentPosition: new THREE.Vector3(0, playfieldConfig.noteHitY, 0),
+  targetPosition: new THREE.Vector3(0, playfieldConfig.noteHitY, 0),
+  currentQuaternion: new THREE.Quaternion(),
+  targetQuaternion: new THREE.Quaternion(),
+  currentZone: null,
+  targetZone: null
+};
+
+const clock = new THREE.Clock();
+
+function getTargetForNote(note) {
+  return {
+    position: note.hitPosition.clone()
+  };
+}
+
+function laneX(lane, phase) {
+  return -4.2 + ((lane * 1.68 + phase * 9.6) % 8.4);
+}
+
+function defaultZOffset(seed) {
+  return Math.sin(seed * 37.0) * playfieldConfig.zSpread;
+}
+
+function normalizeVector(value, fallback) {
+  const vector = toVector3(value, fallback);
+  return vector.lengthSq() > 0.000001 ? vector.normalize() : fallback.clone().normalize();
+}
+
+function directionFromAngles(azimuth = 0, elevation = 0) {
+  const horizontal = Math.cos(elevation);
+  return new THREE.Vector3(
+    Math.cos(azimuth) * horizontal,
+    Math.sin(elevation),
+    Math.sin(azimuth) * horizontal
+  ).normalize();
+}
+
+function perpendicularTo(axis, preferred = new THREE.Vector3(0, -1, 0)) {
+  let projected = preferred.clone().sub(axis.clone().multiplyScalar(preferred.dot(axis)));
+  if (projected.lengthSq() < 0.000001) {
+    projected = new THREE.Vector3(1, 0, 0).sub(axis.clone().multiplyScalar(axis.x));
+  }
+  if (projected.lengthSq() < 0.000001) {
+    projected = new THREE.Vector3(0, 0, 1).sub(axis.clone().multiplyScalar(axis.z));
+  }
+  return projected.normalize();
+}
+
+function fallDirectionFromAngle(judgeLineDirection, fallAngle = 0) {
+  return perpendicularTo(judgeLineDirection).applyAxisAngle(judgeLineDirection, fallAngle).normalize();
+}
+
+function quaternionFromXY(xAxis, yAxis) {
+  const x = xAxis.clone().normalize();
+  const y = yAxis.clone().normalize();
+  const z = new THREE.Vector3().crossVectors(x, y).normalize();
+  const correctedY = new THREE.Vector3().crossVectors(z, x).normalize();
+  return new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().makeBasis(x, correctedY, z));
+}
+
+function createDropZone(raw = {}, fallback = {}) {
+  const receiverPosition = toVector3(
+    raw.receiverPosition ?? raw.position ?? raw.zonePosition,
+    fallback.receiverPosition ?? new THREE.Vector3(0, playfieldConfig.noteHitY, 0)
+  );
+  const judgeLineDirection = raw.judgeLineDirection
+    ? normalizeVector(raw.judgeLineDirection, fallback.judgeLineDirection ?? new THREE.Vector3(1, 0, 0))
+    : raw.judgeLineAngles
+      ? directionFromAngles(raw.judgeLineAngles[0] ?? 0, raw.judgeLineAngles[1] ?? 0)
+      : raw.judgeLineAzimuth !== undefined || raw.judgeLineElevation !== undefined
+        ? directionFromAngles(raw.judgeLineAzimuth ?? 0, raw.judgeLineElevation ?? 0)
+        : normalizeVector(fallback.judgeLineDirection, new THREE.Vector3(1, 0, 0));
+  let fallDirection = raw.fallDirection
+    ? normalizeVector(raw.fallDirection, fallback.fallDirection ?? new THREE.Vector3(0, -1, 0))
+    : fallback.fallDirection && raw.fallAngle === undefined
+      ? normalizeVector(fallback.fallDirection, new THREE.Vector3(0, -1, 0))
+      : fallDirectionFromAngle(judgeLineDirection, raw.fallAngle ?? fallback.fallAngle ?? 0);
+  fallDirection = fallDirection
+    .sub(judgeLineDirection.clone().multiplyScalar(fallDirection.dot(judgeLineDirection)))
+    .normalize();
+  if (fallDirection.lengthSq() < 0.000001) fallDirection.copy(perpendicularTo(judgeLineDirection));
+  const depthDirection = new THREE.Vector3().crossVectors(judgeLineDirection, fallDirection).normalize();
+  const receiverQuaternion = quaternionFromXY(judgeLineDirection, fallDirection.clone().negate());
+  const noteQuaternion = quaternionFromXY(judgeLineDirection, fallDirection.clone().negate());
+
+  return {
+    receiverPosition,
+    judgeLineDirection,
+    fallDirection,
+    depthDirection,
+    receiverQuaternion,
+    noteQuaternion,
+    travelDistance: raw.travelDistance ?? fallback.travelDistance ?? Math.abs(playfieldConfig.noteStartY - playfieldConfig.noteHitY)
+  };
+}
+
+function localPointInZone(zone, localX = 0, depthOffset = 0) {
+  return zone.receiverPosition.clone()
+    .add(zone.judgeLineDirection.clone().multiplyScalar(localX))
+    .add(zone.depthDirection.clone().multiplyScalar(depthOffset));
+}
+
+function normalizeTimeline(events = [], defaultValue = 0) {
+  return {
+    defaultValue,
+    events: [...events].sort((a, b) => a.startTime - b.startTime || a.endTime - b.endTime)
+  };
+}
+
+function curveValue(event, localTime) {
+  const duration = Math.max(0.0001, event.endTime - event.startTime);
+  const raw = THREE.MathUtils.clamp(localTime / duration, 0, 1);
+  const curve = event.curve ?? "linear";
+  const u = curve === "easeInCubic"
+    ? raw * raw * raw
+    : curve === "smoothstep"
+      ? raw * raw * (3 - 2 * raw)
+      : raw;
+  const from = event.from ?? event.value ?? 0;
+  const to = event.to ?? event.value ?? from;
+  return THREE.MathUtils.lerp(from, to, u);
+}
+
+function evaluateTimeline(timeline, chartTime) {
+  if (!timeline) return 0;
+  let previous = null;
+  let next = null;
+  for (const event of timeline.events) {
+    if (event.startTime <= chartTime && chartTime < event.endTime) {
+      return curveValue(event, chartTime - event.startTime);
+    }
+    if (event.startTime <= chartTime) previous = event;
+    if (event.startTime > chartTime) {
+      next = event;
+      break;
+    }
+  }
+  if (previous) return curveValue(previous, previous.endTime - previous.startTime);
+  if (next) return curveValue(next, 0);
+  return timeline.defaultValue;
+}
+
+function currentFlowSpeed() {
+  return Math.max(0.001, evaluateTimeline(chartState.flowSpeedTimeline, chartState.chartTime));
+}
+
+function currentCameraOffset() {
+  return {
+    x: evaluateTimeline(chartState.cameraTimelines.x, chartState.chartTime),
+    y: evaluateTimeline(chartState.cameraTimelines.y, chartState.chartTime),
+    z: evaluateTimeline(chartState.cameraTimelines.z, chartState.chartTime),
+    targetX: evaluateTimeline(chartState.cameraTimelines.targetX, chartState.chartTime),
+    targetY: evaluateTimeline(chartState.cameraTimelines.targetY, chartState.chartTime),
+    targetZ: evaluateTimeline(chartState.cameraTimelines.targetZ, chartState.chartTime),
+    fov: evaluateTimeline(chartState.cameraTimelines.fov, chartState.chartTime)
+  };
+}
+
+function receiverTargetAt(chartTime) {
+  let target = createDropZone();
+  for (const event of chartState.receiverEvents) {
+    if (event.hitTime > chartTime) break;
+    const receiverPosition = toVector3(
+      event.receiverPosition ?? event.position ?? event.targetPosition ?? event.target,
+      target.receiverPosition
+    );
+    if (event.x !== undefined || event.y !== undefined || event.z !== undefined) {
+      receiverPosition.set(
+        event.x ?? receiverPosition.x,
+        event.y ?? receiverPosition.y,
+        event.z ?? receiverPosition.z
+      );
+    }
+    target = createDropZone({ ...event, receiverPosition }, target);
+  }
+  return target;
+}
+
+function createNoteMesh() {
+  const mesh = new THREE.Mesh(sphereGeo, matMiddle.clone());
+  const halo = new THREE.Mesh(noteHaloGeo, makeHotGlowMaterial(0xffffff, 0.56, 1.9));
+  halo.userData.baseOpacity = 0.56;
+  halo.scale.setScalar(middleHaloScale);
+  mesh.add(halo);
+  mesh.userData.halo = halo;
+  mesh.userData.baseScale = 1.248;
+  mesh.userData.baseOpacity = 1;
+  notesRoot.add(mesh);
+  return mesh;
+}
+
+function makeChevronGeometry(direction, width, height, thickness) {
+  const sign = direction === "left" ? -1 : 1;
+  const w = width * 0.5;
+  const h = height * 0.5;
+  const t = thickness;
+  const points = [
+    [-w, h],
+    [w * 0.86, 0],
+    [-w, -h],
+    [-w + t, -h],
+    [w * 0.86 - t * 1.55, 0],
+    [-w + t, h]
+  ].map(([x, y]) => new THREE.Vector2(x * sign, y));
+  const shape = new THREE.Shape(points);
+  return new THREE.ShapeGeometry(shape);
+}
+
+function createSideNoteMesh(direction) {
+  const group = new THREE.Group();
+  const color = direction === "left" ? palette.left : palette.right;
+  const material = makeHotGlowMaterial(color, 0.98, 2.36);
+  const glowMaterial = makeHotGlowMaterial(color, 0.76, 3.55);
+  const chevronGeo = makeChevronGeometry(direction, 0.96, 0.96, 0.23);
+  const chevronCount = 4;
+  const step = playfieldConfig.receiverRadius * 0.28;
+  const sideCenter = (direction === "left" ? -1 : 1) * playfieldConfig.receiverRadius * 0.46;
+
+  for (let i = 0; i < chevronCount; i += 1) {
+    const baseX = sideCenter + (i - (chevronCount - 1) / 2) * step;
+    const glow = new THREE.Mesh(chevronGeo, glowMaterial.clone());
+    const chevron = new THREE.Mesh(chevronGeo, material.clone());
+    glow.position.set(baseX, 0, -0.01);
+    chevron.position.set(baseX, 0, 0);
+    glow.scale.setScalar(1.28);
+    glow.userData.opacityScale = 1;
+    chevron.userData.opacityScale = 1;
+    group.add(glow, chevron);
+  }
+
+  group.userData.baseScale = 1;
+  group.userData.baseOpacity = 1;
+  notesRoot.add(group);
+  return group;
+}
+
+function spawnNote(rawNote, index = 0) {
+  const hitTime = rawNote.hitTime ?? rawNote.time ?? 0;
+  const phase = ((hitTime ?? 0) / timingConfig.chartDuration) % 1;
+  const lane = rawNote.lane ?? 0;
+  const type = rawNote.type ?? "middle";
+  const localX = type === "middle"
+    ? (rawNote.localX ?? rawNote.x ?? laneX(lane, phase))
+    : 0;
+  const depthOffset = rawNote.depthOffset ?? rawNote.z ?? defaultZOffset(rawNote.zSeed ?? phase);
+  const zone = createDropZone(rawNote.zone ?? rawNote, createDropZone());
+  const hitPosition = toVector3(
+    rawNote.hitPosition ?? rawNote.targetPosition,
+    localPointInZone(zone, localX, depthOffset)
+  );
+  const travelDistance = rawNote.travelDistance
+    ?? zone.travelDistance
+    ?? Math.abs((rawNote.startY ?? playfieldConfig.noteStartY) - playfieldConfig.noteHitY);
+  const startPosition = toVector3(
+    rawNote.startPosition,
+    hitPosition.clone().sub(zone.fallDirection.clone().multiplyScalar(travelDistance))
+  );
+  const receiverZone = createDropZone(rawNote.receiverZone ?? rawNote.targetZone ?? rawNote, zone);
+  const mesh = type === "middle" ? createNoteMesh() : createSideNoteMesh(type);
+  if (type !== "middle") mesh.quaternion.copy(zone.noteQuaternion);
+  notes.push({
+    mesh,
+    type,
+    lane,
+    hitTime,
+    localX,
+    depthOffset,
+    zone,
+    startPosition,
+    hitPosition,
+    receiverZone,
+    hitGroup: rawNote.hitGroup ?? rawNote.group ?? `note-${index}`,
+    pulse: Math.random() * 10,
+    judged: false,
+    hit: false
+  });
+}
+
+function clearNotes() {
+  notes.forEach((note) => {
+    notesRoot.remove(note.mesh);
+    note.mesh.traverse((object) => {
+      object.material?.dispose?.();
+    });
+  });
+  notes.length = 0;
+}
+
+function toVector3(value, fallback) {
+  if (Array.isArray(value)) return new THREE.Vector3(value[0], value[1], value[2]);
+  if (value && typeof value === "object") {
+    return new THREE.Vector3(value.x ?? fallback.x, value.y ?? fallback.y, value.z ?? fallback.z);
+  }
+  return fallback.clone();
+}
+
+function applyChartSettings(chart) {
+  if (chart.timing) Object.assign(timingConfig, chart.timing);
+  if (chart.playfield) Object.assign(playfieldConfig, chart.playfield);
+  chartState.flowSpeedTimeline = normalizeTimeline(
+    chart.timelines?.FlowSpeed ?? chart.timelines?.flowSpeed ?? [],
+    timingConfig.flowSpeed
+  );
+  chartState.cameraTimelines = {
+    x: normalizeTimeline(chart.timelines?.CameraX ?? chart.timelines?.CamX ?? [], 0),
+    y: normalizeTimeline(chart.timelines?.CameraY ?? chart.timelines?.CamY ?? [], 0),
+    z: normalizeTimeline(chart.timelines?.CameraZ ?? chart.timelines?.CamZ ?? [], 0),
+    targetX: normalizeTimeline(chart.timelines?.CameraTargetX ?? [], 0),
+    targetY: normalizeTimeline(chart.timelines?.CameraTargetY ?? [], 0),
+    targetZ: normalizeTimeline(chart.timelines?.CameraTargetZ ?? [], 0),
+    fov: normalizeTimeline(chart.timelines?.CameraFov ?? [], 0)
+  };
+  chartState.receiverEvents = [...(chart.receiverEvents ?? [])].sort((a, b) => a.hitTime - b.hitTime);
+  if (chart.camera) {
+    const cameraSettings = chart.camera;
+    cameraProfile.fov = cameraSettings.fov ?? cameraProfile.fov;
+    cameraProfile.near = cameraSettings.near ?? cameraProfile.near;
+    cameraProfile.far = cameraSettings.far ?? cameraProfile.far;
+    cameraProfile.position.copy(toVector3(cameraSettings.position, cameraProfile.position));
+    cameraProfile.lookAt.copy(toVector3(cameraSettings.target ?? cameraSettings.lookAt, cameraProfile.lookAt));
+    applyCameraProfile();
+    controls.target.copy(cameraProfile.lookAt);
+    controls.update();
+  }
+}
+
+function configureCameraMount() {
+  cameraMount.configured = true;
+  cameraMount.referenceReceiverPosition.set(0, playfieldConfig.noteHitY, 0);
+  cameraMount.initialReceiverQuaternion.identity();
+  cameraMount.inverseInitialReceiverQuaternion.identity();
+}
+
+function loadChart(chart) {
+  chartState.chart = chart;
+  chartState.startTime = clock?.getElapsedTime?.() ?? 0;
+  chartState.chartTime = 0;
+  cameraMount.configured = false;
+  applyChartSettings(chart);
+  const initialZone = receiverTargetAt(0);
+  configureCameraMount();
+  receiverState.currentZone = initialZone;
+  receiverState.targetZone = initialZone;
+  receiverState.currentPosition.copy(initialZone.receiverPosition);
+  receiverState.targetPosition.copy(initialZone.receiverPosition);
+  receiverState.currentQuaternion.copy(initialZone.receiverQuaternion);
+  receiverState.targetQuaternion.copy(initialZone.receiverQuaternion);
+  receiverState.anchor.copy(receiverState.currentPosition);
+  syncPlayfieldVisuals();
+  clearNotes();
+  chart.notes.forEach((note, index) => spawnNote(note, index));
+}
+
+function createDemoChart() {
+  const beatCount = 32;
+  const duration = 11.2;
+  const chartNotes = [];
+  const receiverEvents = [];
+  const prismCenter = new THREE.Vector3(0, playfieldConfig.noteHitY, 0);
+  const prismApothem = 18.6;
+  const fallDirection = new THREE.Vector3(0, -1, 0);
+
+  const faceAt = (step) => {
+    const normalAngle = -step * Math.PI / 4;
+    const faceNormal = new THREE.Vector3(Math.cos(normalAngle), 0, Math.sin(normalAngle)).normalize();
+    const judgeLineDirection = new THREE.Vector3().crossVectors(fallDirection, faceNormal).normalize();
+    return {
+      faceNormal,
+      judgeLineDirection,
+      fallDirection,
+      receiverPosition: prismCenter.clone().add(faceNormal.clone().multiplyScalar(prismApothem))
+    };
+  };
+
+  const zonePayload = (face) => ({
+    receiverPosition: face.receiverPosition.toArray(),
+    judgeLineDirection: face.judgeLineDirection.toArray(),
+    fallDirection: face.fallDirection.toArray()
+  });
+
+  let currentFaceIndex = 0;
+  let currentFace = faceAt(currentFaceIndex);
+  receiverEvents.push({ hitTime: 0, ...zonePayload(currentFace) });
+
+  for (let i = 0; i < beatCount; i += 1) {
+    const phrase = i % 4;
+    const hitTime = 0.45 + (i / beatCount) * duration;
+    const phase = hitTime / duration;
+    const hitGroup = `g-${i}`;
+    const add = (lane) => {
+      const localX = laneX(lane, phase);
+      const depthOffset = defaultZOffset(phase + lane * 0.07);
+      chartNotes.push({
+        type: "middle",
+        lane,
+        localX,
+        hitTime,
+        hitGroup,
+        depthOffset,
+        zone: zonePayload(currentFace)
+      });
+    };
+    if (phrase === 0) {
+      add((i + 1) % 6);
+    } else if (phrase === 2) {
+      add((i + 3) % 6);
+    } else if (phrase === 1) {
+      add(i % 6);
+      add((i + 2) % 6);
+    } else {
+      add(i % 6);
+    }
+
+    if (phrase === 3) {
+      const nextFace = faceAt(currentFaceIndex + 1);
+      chartNotes.push({
+        type: "left",
+        hitTime,
+        hitGroup: `side-${i}`,
+        zone: zonePayload(currentFace),
+        receiverZone: zonePayload(nextFace)
+      });
+      receiverEvents.push({ hitTime, ...zonePayload(nextFace) });
+      currentFaceIndex += 1;
+      currentFace = nextFace;
+    }
+  }
+  return {
+    meta: { title: "mock", format: "ParticleSoarChart/v0" },
+    timing: { ...timingConfig, chartDuration: duration },
+    playfield: { ...playfieldConfig },
+    timelines: { FlowSpeed: [] },
+    receiverEvents,
+    notes: chartNotes
+  };
+}
+
+function acquireLine() {
+  const line = new THREE.Mesh(
+    new THREE.BufferGeometry(),
+    makeGradientLineMaterial()
+  );
+  notesRoot.add(line);
+  linePool.push(line);
+  return line;
+}
+
+for (let i = 0; i < renderConfig.pooledConnections; i += 1) acquireLine();
+
+const receiverGroup = new THREE.Group();
+receiverGroup.position.set(0, playfieldConfig.noteHitY, 0);
+scene.add(receiverGroup);
+
+const octagonGuide = new THREE.LineLoop(
+  new THREE.BufferGeometry(),
+  new THREE.LineBasicMaterial({
+    color: 0xeaf7ff,
+    transparent: true,
+    opacity: 0.18,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false
+  })
+);
+scene.add(octagonGuide);
+
+function syncOctagonGuide() {
+  const apothem = 18.6;
+  const center = new THREE.Vector3(0, playfieldConfig.noteHitY - 0.02, 0);
+  const radius = apothem / Math.cos(Math.PI / 8);
+  const points = [];
+  for (let i = 0; i < 8; i += 1) {
+    const angle = -Math.PI / 2 + Math.PI / 8 + i * Math.PI / 4;
+    points.push(
+      center.x + Math.cos(angle) * radius,
+      center.y,
+      center.z + Math.sin(angle) * radius
+    );
+  }
+  octagonGuide.geometry.dispose();
+  octagonGuide.geometry = new THREE.BufferGeometry();
+  octagonGuide.geometry.setAttribute("position", new THREE.Float32BufferAttribute(points, 3));
+}
+
+function makeEllipseTubeGeometry(radiusX, radiusY, tubeRadius) {
+  const points = [];
+  const segments = 192;
+  for (let i = 0; i < segments; i += 1) {
+    const a = (i / segments) * Math.PI * 2;
+    points.push(new THREE.Vector3(Math.cos(a) * radiusX, 0, Math.sin(a) * radiusY));
+  }
+  const curve = new THREE.CatmullRomCurve3(points, true, "centripetal");
+  return new THREE.TubeGeometry(curve, segments, tubeRadius, 8, true);
+}
+
+const receiverRing = new THREE.Mesh(
+  makeEllipseTubeGeometry(playfieldConfig.receiverRadius, playfieldConfig.receiverRadius, 0.032),
+  makeHotGlowMaterial(0xeaf7ff, 0.92, 1.45)
+);
+receiverGroup.add(receiverRing);
+
+function syncPlayfieldVisuals() {
+  receiverState.anchor.copy(receiverState.currentPosition);
+  receiverGroup.position.copy(receiverState.anchor);
+  receiverGroup.quaternion.copy(receiverState.currentQuaternion);
+  receiverRing.geometry.dispose();
+  receiverRing.geometry = makeEllipseTubeGeometry(
+    playfieldConfig.receiverRadius,
+    playfieldConfig.receiverRadius,
+    0.032
+  );
+  receiverSquareParticles?.forEach((square) => {
+    square.userData.radius = playfieldConfig.receiverRadius;
+  });
+  syncOctagonGuide();
+}
+
+const landingHintGeo = new THREE.TorusGeometry(0.34, 0.018, 40, 6);
+landingHintGeo.rotateX(Math.PI / 2);
+function acquireLandingHint() {
+  const hint = new THREE.Mesh(landingHintGeo, makeGlowMaterial(0xeaf7ff, 0.18));
+  hint.visible = false;
+  notesRoot.add(hint);
+  landingHintPool.push(hint);
+  return hint;
+}
+
+for (let i = 0; i < renderConfig.pooledLandingHints; i += 1) acquireLandingHint();
+
+const receiverSquareParticles = Array.from({ length: renderConfig.receiverParticles }, (_, index) => {
+  const size = 0.14 + (index % 4) * 0.045;
+  const square = new THREE.Mesh(
+    new THREE.PlaneGeometry(size, size),
+    makeGlowMaterial(0xd0d3d8, 0.55)
+  );
+  const angle = (index / renderConfig.receiverParticles) * Math.PI * 2 + Math.sin(index * 8.31) * 0.22;
+  square.userData = {
+    angle,
+    radius: playfieldConfig.receiverRadius,
+    orbitSpeed: 0.28 + (index % 7) * 0.018,
+    ySeed: (index * 0.217) % 1,
+    radialDrift: Math.sin(index * 11.7) * 0.22,
+    tangentDrift: Math.cos(index * 7.9) * 0.28,
+    speed: 0.09 + (index % 5) * 0.02,
+    baseOpacity: 0.62 + (index % 3) * 0.08
+  };
+  receiverGroup.add(square);
+  return square;
+});
+
+loadChart(createDemoChart());
+
+function setFreeCamera(enabled) {
+  debugFreeCamera = Boolean(enabled);
+  controls.enabled = debugFreeCamera;
+  cameraModeReadout.textContent = debugFreeCamera ? "free" : "play";
+  if (!debugFreeCamera) {
+    const cameraOffset = currentCameraOffset();
+    const target = applyCameraProfile(0, 0, receiverState.anchor, receiverState.currentQuaternion, cameraOffset);
+    controls.target.copy(target);
+    controls.update();
+  }
+}
+
+window.ParticleSoar = {
+  loadChart,
+  cameraProfile,
+  timingConfig,
+  playfieldConfig,
+  setFreeCamera
+};
+
+const leftKeyCodes = new Set([
+  "Backquote", "Tab", "CapsLock", "ShiftLeft",
+  "Digit1", "Digit2", "Digit3",
+  "KeyQ", "KeyW", "KeyE",
+  "KeyA", "KeyS",
+  "KeyZ", "KeyX"
+]);
+
+const rightKeyCodes = new Set([
+  "KeyP", "BracketLeft", "BracketRight", "Backslash",
+  "Semicolon", "Quote", "Enter",
+  "Period", "Slash", "ShiftRight",
+  "Minus", "Equal", "Backspace"
+]);
+
+function judgeSideInput(direction) {
+  const windowSeconds = 0.16;
+  let best = null;
+  let bestDelta = Infinity;
+  notes.forEach((note) => {
+    if (note.type !== direction || note.judged) return;
+    const delta = Math.abs(timeUntilHit(note.hitTime, chartState.chartTime));
+    if (delta < bestDelta) {
+      best = note;
+      bestDelta = delta;
+    }
+  });
+  if (!best || bestDelta > windowSeconds) return;
+  best.judged = true;
+  best.hit = true;
+  receiverState.targetZone = best.receiverZone;
+  receiverState.targetPosition.copy(best.receiverZone.receiverPosition);
+  receiverState.targetQuaternion.copy(best.receiverZone.receiverQuaternion);
+}
+
+window.addEventListener("keydown", (event) => {
+  if (event.repeat) return;
+  if (event.code === "Equal") {
+    event.preventDefault();
+    setFreeCamera(!debugFreeCamera);
+    return;
+  }
+  if (leftKeyCodes.has(event.code)) judgeSideInput("left");
+  if (rightKeyCodes.has(event.code)) judgeSideInput("right");
+});
+
+function easeInCubic(t) {
+  return t * t * t;
+}
+
+function smoothstep(edge0, edge1, value) {
+  const x = THREE.MathUtils.clamp((value - edge0) / (edge1 - edge0), 0, 1);
+  return x * x * (3 - 2 * x);
+}
+
+function noteVisibility(progress) {
+  const fadeIn = smoothstep(0.0, 0.12, progress);
+  const fadeOut = 1 - smoothstep(1.02, 1.15, progress);
+  return fadeIn * fadeOut;
+}
+
+function noteTravelFactor(progress) {
+  return progress <= 1
+    ? easeInCubic(THREE.MathUtils.clamp(progress, 0, 1))
+    : 1 + 3 * (progress - 1);
+}
+
+function timeUntilHit(hitTime, chartTime) {
+  let dt = hitTime - chartTime;
+  if (dt < -timingConfig.postHitSeconds) dt += timingConfig.chartDuration;
+  return dt;
+}
+
+function notePosition(note, chartTime) {
+  const timeToHit = timeUntilHit(note.hitTime, chartTime);
+  const travelSeconds = note.startPosition.distanceTo(note.hitPosition) / currentFlowSpeed();
+  const p = 1 - timeToHit / travelSeconds;
+  const factor = noteTravelFactor(p);
+  const x = THREE.MathUtils.lerp(note.startPosition.x, note.hitPosition.x, factor);
+  const y = THREE.MathUtils.lerp(note.startPosition.y, note.hitPosition.y, factor);
+  const z = THREE.MathUtils.lerp(note.startPosition.z, note.hitPosition.z, factor);
+  return { position: new THREE.Vector3(x, y, z), progress: p, timeToHit };
+}
+
+function resize() {
+  const w = window.innerWidth;
+  const h = window.innerHeight;
+  camera.aspect = w / h;
+  camera.updateProjectionMatrix();
+  renderer.setSize(w, h);
+  composer.setSize(w, h);
+  bloom.setSize(w, h);
+}
+window.addEventListener("resize", resize);
+
+function formatVector(v) {
+  return `${v.x.toFixed(3)}, ${v.y.toFixed(3)}, ${v.z.toFixed(3)}`;
+}
+
+function updateCameraDebug() {
+  cameraPositionReadout.textContent = formatVector(camera.position);
+  cameraTargetReadout.textContent = formatVector(controls.target);
+  cameraFovReadout.textContent = camera.fov.toFixed(2);
+}
+
+function setObjectOpacity(object, opacity) {
+  object.traverse((child) => {
+    if (child.material) child.material.opacity = opacity * (child.userData.opacityScale ?? 1);
+  });
+}
+
+function updateNotes(t, chartTime) {
+  const visibleNotes = [];
+  notes.forEach((note) => {
+    const { position, progress, timeToHit } = notePosition(note, chartTime);
+    note.mesh.position.copy(position);
+    if (note.type !== "middle") note.mesh.quaternion.copy(note.zone.noteQuaternion);
+    const isMiddle = note.type === "middle";
+    const pulseScale = isMiddle ? Math.sin(t * 5 + note.pulse) * 0.035 : 0;
+    const scale = note.mesh.userData.baseScale * (1 + pulseScale);
+    const visibility = noteVisibility(progress);
+    const hitFlash = isMiddle ? (note.mesh.userData.hitFlash ?? 0) : 0;
+    const opacity = note.mesh.userData.baseOpacity * visibility * (1 + hitFlash * 0.45);
+    const halo = note.mesh.userData.halo;
+
+    note.mesh.scale.setScalar(scale * (1 + hitFlash * 0.16));
+    setObjectOpacity(note.mesh, opacity);
+    note.mesh.visible = true;
+    if (halo) {
+      halo.visible = opacity > 0.02;
+      halo.material.opacity = opacity * halo.userData.baseOpacity;
+      halo.scale.setScalar(middleHaloScale);
+    }
+    note.mesh.userData.hitFlash = isMiddle ? Math.max(0, hitFlash - 0.08) : 0;
+    visibleNotes.push({ note, progress, timeToHit, opacity, visibility });
+  });
+  return visibleNotes;
+}
+
+function updateLandingHints(visibleNotes) {
+  landingHintPool.forEach((hint) => {
+    hint.visible = false;
+  });
+
+  let hintIndex = 0;
+  visibleNotes.forEach((item) => {
+    if (item.note.type !== "middle") return;
+    if (item.opacity <= 0.025) return;
+    const timeToHit = item.timeToHit;
+    if (timeToHit < 0 || timeToHit > 1 || hintIndex >= landingHintPool.length) return;
+
+    const targetInfo = getTargetForNote(item.note);
+    const nearHit = smoothstep(0.0, 1.0, 1 - timeToHit);
+    const hint = landingHintPool[hintIndex];
+    hint.position.copy(targetInfo.position);
+    hint.quaternion.copy(item.note.zone.receiverQuaternion);
+    hint.scale.setScalar(0.75 + nearHit * 0.65);
+    hint.material.opacity = item.opacity * (0.08 + nearHit * 0.22);
+    hint.visible = true;
+    hintIndex += 1;
+  });
+}
+
+function writeConnectionGeometry(line, a, b, color, opacityScale) {
+  const start = a.note.mesh.position;
+  const end = b.note.mesh.position;
+  const delta = end.clone().sub(start);
+  if (delta.length() <= 0.001) return false;
+
+  const viewDirection = camera.position.clone().sub(start.clone().add(end).multiplyScalar(0.5)).normalize();
+  const side = delta.clone().cross(viewDirection).normalize().multiplyScalar(renderConfig.multiHitLineWidth * 0.5);
+  const positions = [];
+  const colors = [];
+  const alphas = [];
+  const indices = [];
+  const segmentCount = 1;
+
+  for (let i = 0; i <= segmentCount; i += 1) {
+    const u = i / segmentCount;
+    const point = start.clone().lerp(end, u);
+    const alpha = THREE.MathUtils.lerp(a.opacity, b.opacity, u) * opacityScale;
+    positions.push(
+      point.x + side.x, point.y + side.y, point.z + side.z,
+      point.x - side.x, point.y - side.y, point.z - side.z
+    );
+    colors.push(color.r, color.g, color.b, color.r, color.g, color.b);
+    alphas.push(alpha, alpha);
+  }
+
+  for (let i = 0; i < segmentCount; i += 1) {
+    const base = i * 2;
+    indices.push(base, base + 1, base + 2, base + 1, base + 3, base + 2);
+  }
+
+  line.geometry.dispose();
+  line.geometry = new THREE.BufferGeometry();
+  line.geometry.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
+  line.geometry.setAttribute("lineColor", new THREE.Float32BufferAttribute(colors, 3));
+  line.geometry.setAttribute("lineAlpha", new THREE.Float32BufferAttribute(alphas, 1));
+  line.geometry.setIndex(indices);
+  line.visible = true;
+  return true;
+}
+
+function updateMultiHitLines(visibleNotes) {
+  linePool.forEach((line) => {
+    line.visible = false;
+  });
+
+  let lineIndex = 0;
+  const groups = new Map();
+  visibleNotes.forEach((item) => {
+    if (item.note.type !== "middle") return;
+    if (!groups.has(item.note.hitGroup)) groups.set(item.note.hitGroup, []);
+    groups.get(item.note.hitGroup).push(item);
+  });
+
+  for (const group of groups.values()) {
+    for (let i = 0; i < group.length - 1; i += 1) {
+      const a = group[i];
+      const b = group[i + 1];
+      if (lineIndex >= linePool.length || a.opacity <= 0.02 || b.opacity <= 0.02) continue;
+      if (writeConnectionGeometry(linePool[lineIndex], a, b, palette.white, 0.34)) lineIndex += 1;
+    }
+  }
+}
+
+function updateReceiver(t, beat) {
+  receiverRing.scale.setScalar(1 + beat * 0.018);
+  receiverGroup.position.copy(receiverState.anchor);
+  receiverGroup.quaternion.copy(receiverState.currentQuaternion);
+  receiverGroup.updateMatrixWorld(true);
+  const receiverWorldQuaternion = new THREE.Quaternion();
+  receiverGroup.getWorldQuaternion(receiverWorldQuaternion);
+  const billboardQuaternion = receiverWorldQuaternion.invert().multiply(camera.quaternion);
+  receiverSquareParticles.forEach((square, index) => {
+    const phase = (square.userData.ySeed + t * square.userData.speed) % 1;
+    const rise = phase * 2.45;
+    const angle = square.userData.angle
+      + t * square.userData.orbitSpeed
+      + Math.sin(t * 0.16 + index) * 0.025;
+    const radial = square.userData.radius + square.userData.radialDrift * phase;
+    const tangent = square.userData.tangentDrift * phase;
+    const radialX = Math.cos(angle);
+    const radialZ = Math.sin(angle);
+    const tangentX = -radialZ;
+    const tangentZ = radialX;
+    square.position.set(
+      radialX * radial + tangentX * tangent,
+      0.2 + rise,
+      radialZ * radial + tangentZ * tangent
+    );
+    square.quaternion.copy(billboardQuaternion);
+    square.rotateZ(t * (0.18 + (index % 4) * 0.07) + index);
+    square.material.opacity = square.userData.baseOpacity
+      * (1 - smoothstep(0.66, 1.0, phase))
+      * smoothstep(0.0, 0.14, phase);
+  });
+}
+
+function updateReceiverAnchor() {
+  const target = receiverTargetAt(chartState.chartTime);
+  receiverState.targetZone = target;
+  receiverState.targetPosition.copy(target.receiverPosition);
+  receiverState.targetQuaternion.copy(target.receiverQuaternion);
+  receiverState.currentPosition.lerp(receiverState.targetPosition, 0.14);
+  receiverState.currentQuaternion.slerp(receiverState.targetQuaternion, 0.14);
+  receiverState.anchor.copy(receiverState.currentPosition);
+}
+
+function animate() {
+  const t = clock.getElapsedTime();
+  const beat = 0.5 + 0.5 * Math.sin(t * Math.PI * 2 * 1.2);
+  const slowBeat = 0.5 + 0.5 * Math.sin(t * Math.PI * 2 * 0.4);
+
+  chartState.chartTime = ((t - chartState.startTime) % timingConfig.chartDuration + timingConfig.chartDuration) % timingConfig.chartDuration;
+  updateReceiverAnchor();
+  particlesRoot.rotation.y = -t * 0.035;
+  const visibleNotes = updateNotes(t, chartState.chartTime);
+  updateLandingHints(visibleNotes);
+  updateMultiHitLines(visibleNotes);
+
+  if (debugFreeCamera) {
+    controls.update();
+  } else {
+    const cameraOffset = currentCameraOffset();
+    const target = applyCameraProfile(t, slowBeat, receiverState.anchor, receiverState.currentQuaternion, cameraOffset);
+    controls.target.copy(target);
+  }
+  updateCameraDebug();
+  updateReceiver(t, beat);
+
+  composer.render();
+  requestAnimationFrame(animate);
+}
+
+animate();
+</script>
+
+<style>
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+  background: #04070d;
+  color: #eaf7ff;
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+#app {
+  position: relative;
+  width: 100vw;
+  height: 100vh;
+  overflow: hidden;
+}
+
+#scene {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.hud {
+  position: absolute;
+  left: 28px;
+  right: 28px;
+  top: 24px;
+  display: flex;
+  justify-content: space-between;
+  gap: 20px;
+  pointer-events: none;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  text-shadow: 0 0 24px rgba(150, 220, 255, 0.5);
+}
+
+.mark {
+  width: 30px;
+  height: 30px;
+  border: 2px solid rgba(234, 247, 255, 0.9);
+  border-radius: 50%;
+  box-shadow: 0 0 22px rgba(114, 215, 255, 0.8), inset 0 0 18px rgba(255, 255, 255, 0.35);
+}
+
+.title {
+  font-size: 15px;
+  font-weight: 500;
+  letter-spacing: 0;
+}
+
+.subtitle {
+  margin-top: 2px;
+  font-size: 11px;
+  color: rgba(234, 247, 255, 0.62);
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.meters {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.meters div {
+  min-width: 72px;
+  padding: 8px 10px;
+  border: 1px solid rgba(234, 247, 255, 0.14);
+  background: rgba(4, 7, 13, 0.34);
+  backdrop-filter: blur(10px);
+}
+
+.meters span,
+.meters strong {
+  display: block;
+  font-size: 11px;
+  line-height: 1.3;
+  letter-spacing: 0;
+}
+
+.meters span {
+  color: rgba(234, 247, 255, 0.58);
+}
+
+.meters strong {
+  font-weight: 500;
+  color: rgba(234, 247, 255, 0.9);
+}
+
+.legend {
+  position: absolute;
+  left: 28px;
+  bottom: 24px;
+  display: grid;
+  grid-template-columns: auto auto auto auto auto auto;
+  align-items: center;
+  gap: 8px;
+  color: rgba(234, 247, 255, 0.68);
+  font-size: 12px;
+  pointer-events: none;
+}
+
+.dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  box-shadow: 0 0 18px currentColor;
+}
+
+.dot.middle {
+  color: #eaf7ff;
+  background: #eaf7ff;
+}
+
+.dot.left {
+  color: #70dcff;
+  background: #70dcff;
+}
+
+.dot.right {
+  color: #ff70aa;
+  background: #ff70aa;
+}
+
+.camera-debug {
+  position: absolute;
+  right: 28px;
+  bottom: 24px;
+  min-width: 238px;
+  padding: 10px 12px;
+  border: 1px solid rgba(234, 247, 255, 0.14);
+  background: rgba(4, 7, 13, 0.42);
+  color: rgba(234, 247, 255, 0.74);
+  font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+  font-size: 11px;
+  line-height: 1.55;
+  letter-spacing: 0;
+  pointer-events: none;
+  backdrop-filter: blur(10px);
+}
+
+.camera-debug span {
+  color: rgba(234, 247, 255, 0.96);
+}
+
+@media (max-width: 680px) {
+  .hud {
+    left: 16px;
+    right: 16px;
+    top: 14px;
+    align-items: flex-start;
+  }
+
+  .meters {
+    max-width: 170px;
+  }
+
+  .meters div {
+    min-width: 58px;
+    padding: 6px 8px;
+  }
+
+  .legend {
+    left: 16px;
+    bottom: 14px;
+    grid-template-columns: auto auto;
+  }
+
+  .camera-debug {
+    right: 16px;
+    bottom: 14px;
+    min-width: 210px;
+  }
+}
+</style>
