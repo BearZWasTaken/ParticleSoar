@@ -16,6 +16,7 @@
   </div>
   <div class="legend" aria-hidden="true">
     <span class="dot middle"></span><span>middle</span>
+    <span class="dot space"></span><span>space</span>
     <span class="dot left"></span><span>left</span>
     <span class="dot right"></span><span>right</span>
   </div>
@@ -189,6 +190,7 @@ makeAxisLabel("Z", "#4f8cff").position.set(0, 0, 8.7);
 
 const palette = {
   white: new THREE.Color(0xeaf7ff),
+  space: new THREE.Color(0xffd66b),
   left: new THREE.Color(0x70dcff),
   right: new THREE.Color(0xff70aa)
 };
@@ -240,6 +242,7 @@ function makeGradientLineMaterial() {
 }
 
 const matMiddle = makeHotGlowMaterial(palette.white, 0.99, 2.18);
+const matSpace = makeHotGlowMaterial(palette.space, 0.99, 2.18);
 
 const particleCount = 850;
 const particleGeo = new THREE.BufferGeometry();
@@ -270,6 +273,7 @@ particlesRoot.add(particles);
 
 const sphereGeo = new THREE.SphereGeometry(0.25, 32, 18);
 const noteHaloGeo = new THREE.SphereGeometry(0.25, 32, 18);
+const holdTriangleGeo = makeHoldTriangleGeometry();
 const middleHaloScale = 1.62;
 const notes = [];
 const linePool = [];
@@ -278,7 +282,8 @@ const landingHintPool = [];
 const timingConfig = {
   chartDuration: 8.4,
   flowSpeed: 11.75,
-  postHitSeconds: 0.38
+  postHitSeconds: 0.38,
+  receiverMoveSeconds: 0.28
 };
 
 const playfieldConfig = {
@@ -302,7 +307,8 @@ const chartState = {
   chartTime: 0,
   flowSpeedTimeline: null,
   cameraTimelines: {},
-  receiverEvents: []
+  receiverEvents: [],
+  receiverTransitions: []
 };
 
 const receiverState = {
@@ -312,7 +318,9 @@ const receiverState = {
   currentQuaternion: new THREE.Quaternion(),
   targetQuaternion: new THREE.Quaternion(),
   currentZone: null,
-  targetZone: null
+  targetZone: null,
+  moving: false,
+  progress: 0
 };
 
 const clock = new THREE.Clock();
@@ -466,37 +474,213 @@ function currentCameraOffset() {
   };
 }
 
-function receiverTargetAt(chartTime) {
-  let target = createDropZone();
-  for (const event of chartState.receiverEvents) {
-    if (event.hitTime > chartTime) break;
-    const receiverPosition = toVector3(
-      event.receiverPosition ?? event.position ?? event.targetPosition ?? event.target,
-      target.receiverPosition
+function zoneFromReceiverEvent(event, fallbackZone) {
+  const receiverPosition = toVector3(
+    event.receiverPosition ?? event.position ?? event.targetPosition ?? event.target,
+    fallbackZone.receiverPosition
+  );
+  if (event.x !== undefined || event.y !== undefined || event.z !== undefined) {
+    receiverPosition.set(
+      event.x ?? receiverPosition.x,
+      event.y ?? receiverPosition.y,
+      event.z ?? receiverPosition.z
     );
-    if (event.x !== undefined || event.y !== undefined || event.z !== undefined) {
-      receiverPosition.set(
-        event.x ?? receiverPosition.x,
-        event.y ?? receiverPosition.y,
-        event.z ?? receiverPosition.z
-      );
-    }
-    target = createDropZone({ ...event, receiverPosition }, target);
   }
-  return target;
+  return createDropZone({ ...event, receiverPosition }, fallbackZone);
 }
 
-function createNoteMesh() {
-  const mesh = new THREE.Mesh(sphereGeo, matMiddle.clone());
-  const halo = new THREE.Mesh(noteHaloGeo, makeHotGlowMaterial(0xffffff, 0.56, 1.9));
+function buildReceiverTimeline(rawEvents = []) {
+  const sortedEvents = [...rawEvents].sort((a, b) => a.hitTime - b.hitTime);
+  const events = [];
+  const transitions = [];
+  let previousZone = createDropZone();
+
+  if (sortedEvents.length === 0 || sortedEvents[0].hitTime > 0) {
+    events.push({
+      hitTime: 0,
+      zone: previousZone,
+      raw: { hitTime: 0 }
+    });
+  }
+
+  sortedEvents.forEach((event) => {
+    const zone = zoneFromReceiverEvent(event, previousZone);
+    events.push({
+      hitTime: event.hitTime ?? 0,
+      zone,
+      raw: event
+    });
+    previousZone = zone;
+  });
+
+  for (let i = 1; i < events.length; i += 1) {
+    const event = events[i];
+    const duration = Math.max(0, event.raw.moveSeconds ?? event.raw.duration ?? timingConfig.receiverMoveSeconds);
+    transitions.push({
+      startTime: event.hitTime,
+      endTime: event.hitTime + duration,
+      fromZone: events[i - 1].zone,
+      toZone: event.zone,
+      curve: event.raw.curve ?? "smoothstep"
+    });
+  }
+
+  return { events, transitions };
+}
+
+function transitionProgress(transition, chartTime) {
+  const duration = Math.max(0.0001, transition.endTime - transition.startTime);
+  const raw = THREE.MathUtils.clamp((chartTime - transition.startTime) / duration, 0, 1);
+  if (transition.curve === "linear") return raw;
+  if (transition.curve === "easeInCubic") return raw * raw * raw;
+  if (transition.curve === "easeOutCubic") return 1 - Math.pow(1 - raw, 3);
+  return raw * raw * (3 - 2 * raw);
+}
+
+function interpolateReceiverZones(fromZone, toZone, progress) {
+  const position = fromZone.receiverPosition.clone().lerp(toZone.receiverPosition, progress);
+  const quaternion = fromZone.receiverQuaternion.clone().slerp(toZone.receiverQuaternion, progress);
+  return {
+    zone: progress < 1 ? fromZone : toZone,
+    targetZone: toZone,
+    position,
+    quaternion,
+    moving: progress > 0 && progress < 1,
+    progress
+  };
+}
+
+function receiverStateAt(chartTime) {
+  const events = chartState.receiverEvents;
+  if (events.length === 0) {
+    const zone = createDropZone();
+    return {
+      zone,
+      targetZone: zone,
+      position: zone.receiverPosition.clone(),
+      quaternion: zone.receiverQuaternion.clone(),
+      moving: false,
+      progress: 0
+    };
+  }
+
+  for (const transition of chartState.receiverTransitions) {
+    if (transition.startTime <= chartTime && chartTime < transition.endTime) {
+      return interpolateReceiverZones(
+        transition.fromZone,
+        transition.toZone,
+        transitionProgress(transition, chartTime)
+      );
+    }
+  }
+
+  let activeEvent = events[0];
+  for (const event of events) {
+    if (event.hitTime > chartTime) break;
+    activeEvent = event;
+  }
+  return {
+    zone: activeEvent.zone,
+    targetZone: activeEvent.zone,
+    position: activeEvent.zone.receiverPosition.clone(),
+    quaternion: activeEvent.zone.receiverQuaternion.clone(),
+    moving: false,
+    progress: 1
+  };
+}
+
+function createNoteMesh(kind = "middle") {
+  const isSpace = kind === "space";
+  const mesh = new THREE.Mesh(sphereGeo, (isSpace ? matSpace : matMiddle).clone());
+  const halo = new THREE.Mesh(
+    noteHaloGeo,
+    makeHotGlowMaterial(isSpace ? palette.space : 0xffffff, 0.56, 1.9)
+  );
   halo.userData.baseOpacity = 0.56;
   halo.scale.setScalar(middleHaloScale);
   mesh.add(halo);
   mesh.userData.halo = halo;
+  if (isSpace) {
+    const satellites = Array.from({ length: 4 }, (_, index) => {
+      const satellite = new THREE.Mesh(
+        sphereGeo,
+        makeHotGlowMaterial(palette.space, 0.82, 2.05)
+      );
+      const axis = normalizeVector({
+        x: Math.sin(index * 1.71),
+        y: Math.cos(index * 2.23),
+        z: Math.sin(index * 2.91 + 0.7)
+      }, new THREE.Vector3(0, 1, 0));
+      satellite.userData = {
+        axis,
+        radius: 0.7 + (index % 5) * 0.05,
+        phase: index * 0.74,
+        speed: (index % 2 === 0 ? 1 : -1) * (1.75 + (index % 5) * 0.22),
+        baseOpacity: 0.72,
+        baseScale: 0.26 + (index % 3) * 0.035,
+        trails: Array.from({ length: 12 }, (_, trailIndex) => {
+          const trail = new THREE.Mesh(
+            sphereGeo,
+            makeHotGlowMaterial(palette.space, 0.74, 2.18)
+          );
+          trail.material.depthTest = false;
+          trail.renderOrder = 8;
+          trail.userData.trailIndex = trailIndex + 1;
+          mesh.add(trail);
+          return trail;
+        })
+      };
+      mesh.add(satellite);
+      return satellite;
+    });
+    mesh.userData.spaceSatellites = satellites;
+  }
   mesh.userData.baseScale = 1.248;
   mesh.userData.baseOpacity = 1;
   notesRoot.add(mesh);
   return mesh;
+}
+
+function makeHoldTriangleGeometry() {
+  const shape = new THREE.Shape([
+    new THREE.Vector2(0, 0.62),
+    new THREE.Vector2(-0.54, -0.36),
+    new THREE.Vector2(0.54, -0.36)
+  ]);
+  return new THREE.ShapeGeometry(shape);
+}
+
+function createHoldNoteMesh(kind = "middle") {
+  const color = kind === "space" ? palette.space : palette.white;
+  const group = new THREE.Group();
+  const head = createNoteMesh(kind);
+  const bodyParticles = Array.from({ length: 120 }, (_, index) => {
+    const triangle = new THREE.Mesh(
+      holdTriangleGeo,
+      makeHotGlowMaterial(color, 0.58, 1.88)
+    );
+    const radial = Math.sqrt(((index * 0.61803398875) % 1));
+    const angle = ((index * 2.39996322973) + Math.sin(index * 5.17) * 0.45) % (Math.PI * 2);
+    triangle.userData = {
+      baseOpacity: 0.48 + (index % 4) * 0.055,
+      radial,
+      angle,
+      along: (index * 0.754877666) % 1,
+      scale: 0.22 + (index % 6) * 0.032,
+      spin: (index % 2 === 0 ? 1 : -1) * (0.12 + (index % 9) * 0.019),
+      orbitSpeed: 0.85 + (index % 11) * 0.055
+    };
+    return triangle;
+  });
+  notesRoot.remove(head);
+  group.add(...bodyParticles, head);
+  group.userData.bodyParticles = bodyParticles;
+  group.userData.head = head;
+  group.userData.holdRadiusScale = head.userData.baseScale * 1.8;
+  group.userData.baseScale = 1;
+  group.userData.baseOpacity = 1;
+  notesRoot.add(group);
+  return group;
 }
 
 function makeChevronGeometry(direction, width, height, thickness) {
@@ -544,12 +728,32 @@ function createSideNoteMesh(direction) {
   return group;
 }
 
+function isHoldNote(noteOrType) {
+  const type = typeof noteOrType === "string" ? noteOrType : noteOrType.type;
+  return type === "hold" || type === "middleHold" || type === "spaceHold";
+}
+
+function isSpaceNote(noteOrType) {
+  const type = typeof noteOrType === "string" ? noteOrType : noteOrType.type;
+  return type === "space" || type === "spaceHold";
+}
+
+function holdKind(type) {
+  return type === "spaceHold" ? "space" : "middle";
+}
+
+function isCentralNote(noteOrType) {
+  const type = typeof noteOrType === "string" ? noteOrType : noteOrType.type;
+  return type === "middle" || type === "space" || isHoldNote(type);
+}
+
 function spawnNote(rawNote, index = 0) {
   const hitTime = rawNote.hitTime ?? rawNote.time ?? 0;
+  const endTime = rawNote.endTime ?? rawNote.releaseTime ?? (rawNote.duration !== undefined ? hitTime + rawNote.duration : hitTime);
   const phase = ((hitTime ?? 0) / timingConfig.chartDuration) % 1;
   const lane = rawNote.lane ?? 0;
   const type = rawNote.type ?? "middle";
-  const localX = type === "middle"
+  const localX = isCentralNote(type)
     ? (rawNote.localX ?? rawNote.x ?? laneX(lane, phase))
     : 0;
   const depthOffset = rawNote.depthOffset ?? rawNote.z ?? defaultZOffset(rawNote.zSeed ?? phase);
@@ -566,14 +770,20 @@ function spawnNote(rawNote, index = 0) {
     hitPosition.clone().sub(zone.fallDirection.clone().multiplyScalar(travelDistance))
   );
   const receiverZone = createDropZone(rawNote.receiverZone ?? rawNote.targetZone ?? rawNote, zone);
-  const mesh = type === "middle" ? createNoteMesh() : createSideNoteMesh(type);
-  if (type !== "middle") mesh.quaternion.copy(zone.noteQuaternion);
+  const mesh = isHoldNote(type)
+    ? createHoldNoteMesh(holdKind(type))
+    : isCentralNote(type)
+      ? createNoteMesh(type)
+      : createSideNoteMesh(type);
+  if (!isCentralNote(type)) mesh.quaternion.copy(zone.noteQuaternion);
   notes.push({
     mesh,
     type,
     lane,
     hitTime,
+    endTime,
     localX,
+    wPos: rawNote.wPos ?? localX,
     depthOffset,
     zone,
     startPosition,
@@ -620,7 +830,9 @@ function applyChartSettings(chart) {
     targetZ: normalizeTimeline(chart.timelines?.CameraTargetZ ?? [], 0),
     fov: normalizeTimeline(chart.timelines?.CameraFov ?? [], 0)
   };
-  chartState.receiverEvents = [...(chart.receiverEvents ?? [])].sort((a, b) => a.hitTime - b.hitTime);
+  const receiverTimeline = buildReceiverTimeline(chart.receiverEvents ?? []);
+  chartState.receiverEvents = receiverTimeline.events;
+  chartState.receiverTransitions = receiverTimeline.transitions;
   if (chart.camera) {
     const cameraSettings = chart.camera;
     cameraProfile.fov = cameraSettings.fov ?? cameraProfile.fov;
@@ -647,14 +859,17 @@ function loadChart(chart) {
   chartState.chartTime = 0;
   cameraMount.configured = false;
   applyChartSettings(chart);
-  const initialZone = receiverTargetAt(0);
+  const initialReceiverState = receiverStateAt(0);
+  const initialZone = initialReceiverState.zone;
   configureCameraMount();
   receiverState.currentZone = initialZone;
-  receiverState.targetZone = initialZone;
-  receiverState.currentPosition.copy(initialZone.receiverPosition);
-  receiverState.targetPosition.copy(initialZone.receiverPosition);
-  receiverState.currentQuaternion.copy(initialZone.receiverQuaternion);
-  receiverState.targetQuaternion.copy(initialZone.receiverQuaternion);
+  receiverState.targetZone = initialReceiverState.targetZone;
+  receiverState.currentPosition.copy(initialReceiverState.position);
+  receiverState.targetPosition.copy(initialReceiverState.targetZone.receiverPosition);
+  receiverState.currentQuaternion.copy(initialReceiverState.quaternion);
+  receiverState.targetQuaternion.copy(initialReceiverState.targetZone.receiverQuaternion);
+  receiverState.moving = initialReceiverState.moving;
+  receiverState.progress = initialReceiverState.progress;
   receiverState.anchor.copy(receiverState.currentPosition);
   syncPlayfieldVisuals();
   clearNotes();
@@ -692,6 +907,23 @@ function createDemoChart() {
   let currentFace = faceAt(currentFaceIndex);
   receiverEvents.push({ hitTime: 0, ...zonePayload(currentFace) });
 
+  const tripleHitTime = 1.05;
+  const tripleGroup = "triple-hold-space-test";
+  [
+    { type: "hold", localX: -2.8, depthOffset: -0.18, endTime: tripleHitTime + 1.25 },
+    { type: "spaceHold", localX: 0, depthOffset: 0.12, endTime: tripleHitTime + 1.05 },
+    { type: "middle", localX: 2.8, depthOffset: 0.32 }
+  ].forEach((note, lane) => {
+    chartNotes.push({
+      ...note,
+      lane,
+      hitTime: tripleHitTime,
+      hitGroup: tripleGroup,
+      wPos: note.localX,
+      zone: zonePayload(currentFace)
+    });
+  });
+
   for (let i = 0; i < beatCount; i += 1) {
     const phrase = i % 4;
     const hitTime = 0.45 + (i / beatCount) * duration;
@@ -700,11 +932,15 @@ function createDemoChart() {
     const add = (lane) => {
       const localX = laneX(lane, phase);
       const depthOffset = defaultZOffset(phase + lane * 0.07);
+      const isHold = i % 8 === 5;
+      const isSpaceHold = isHold && i % 16 === 13;
+      const isSpace = !isHold && i % 6 === 4;
       chartNotes.push({
-        type: "middle",
+        type: isSpaceHold ? "spaceHold" : isHold ? "hold" : isSpace ? "space" : "middle",
         lane,
         localX,
         hitTime,
+        ...(isHold ? { endTime: Math.min(hitTime + 0.9, duration - 0.15) } : {}),
         hitGroup,
         depthOffset,
         zone: zonePayload(currentFace)
@@ -909,9 +1145,6 @@ function judgeSideInput(direction) {
   if (!best || bestDelta > windowSeconds) return;
   best.judged = true;
   best.hit = true;
-  receiverState.targetZone = best.receiverZone;
-  receiverState.targetPosition.copy(best.receiverZone.receiverPosition);
-  receiverState.targetQuaternion.copy(best.receiverZone.receiverQuaternion);
 }
 
 window.addEventListener("keydown", (event) => {
@@ -936,7 +1169,13 @@ function smoothstep(edge0, edge1, value) {
 
 function noteVisibility(progress) {
   const fadeIn = smoothstep(0.0, 0.12, progress);
-  const fadeOut = 1 - smoothstep(1.02, 1.15, progress);
+  const fadeOut = 1 - smoothstep(1.005, 1.055, progress);
+  return fadeIn * fadeOut;
+}
+
+function holdVisibility(headProgress, tailProgress) {
+  const fadeIn = smoothstep(0.0, 0.12, headProgress);
+  const fadeOut = 1 - smoothstep(1.005, 1.055, tailProgress);
   return fadeIn * fadeOut;
 }
 
@@ -946,14 +1185,14 @@ function noteTravelFactor(progress) {
     : 1 + 3 * (progress - 1);
 }
 
-function timeUntilHit(hitTime, chartTime) {
+function timeUntilHit(hitTime, chartTime, wrap = true) {
   let dt = hitTime - chartTime;
-  if (dt < -timingConfig.postHitSeconds) dt += timingConfig.chartDuration;
+  if (wrap && dt < -timingConfig.postHitSeconds) dt += timingConfig.chartDuration;
   return dt;
 }
 
-function notePosition(note, chartTime) {
-  const timeToHit = timeUntilHit(note.hitTime, chartTime);
+function notePointAtHitTime(note, hitTime, chartTime, wrap = true) {
+  const timeToHit = timeUntilHit(hitTime, chartTime, wrap);
   const travelSeconds = note.startPosition.distanceTo(note.hitPosition) / currentFlowSpeed();
   const p = 1 - timeToHit / travelSeconds;
   const factor = noteTravelFactor(p);
@@ -961,6 +1200,24 @@ function notePosition(note, chartTime) {
   const y = THREE.MathUtils.lerp(note.startPosition.y, note.hitPosition.y, factor);
   const z = THREE.MathUtils.lerp(note.startPosition.z, note.hitPosition.z, factor);
   return { position: new THREE.Vector3(x, y, z), progress: p, timeToHit };
+}
+
+function notePosition(note, chartTime) {
+  return notePointAtHitTime(note, note.hitTime, chartTime);
+}
+
+function holdSegment(note, chartTime) {
+  const head = notePointAtHitTime(note, note.hitTime, chartTime, false);
+  const tail = notePointAtHitTime(note, note.endTime, chartTime, false);
+  if (head.progress > 1) {
+    head.position.copy(note.hitPosition);
+  }
+  return {
+    head,
+    tail,
+    progress: head.progress,
+    timeToHit: head.timeToHit
+  };
 }
 
 function resize() {
@@ -990,30 +1247,137 @@ function setObjectOpacity(object, opacity) {
   });
 }
 
+function updateSphereNoteVisual(mesh, opacity, scale, hitFlash = 0) {
+  const halo = mesh.userData.halo;
+  mesh.scale.setScalar(scale * (1 + hitFlash * 0.16));
+  setObjectOpacity(mesh, opacity);
+  mesh.visible = true;
+  if (halo) {
+    halo.visible = opacity > 0.02;
+    halo.material.opacity = opacity * halo.userData.baseOpacity;
+    halo.scale.setScalar(middleHaloScale);
+  }
+}
+
+function updateSpaceSatellites(note, t, opacity) {
+  const satellites = note.mesh.userData.spaceSatellites;
+  if (!satellites) return;
+  satellites.forEach((satellite, index) => {
+    const axis = satellite.userData.axis;
+    const base = perpendicularTo(axis, note.zone.judgeLineDirection);
+    const angle = satellite.userData.phase + t * satellite.userData.speed;
+    const orbitPosition = base
+      .applyAxisAngle(axis, angle)
+      .multiplyScalar(satellite.userData.radius);
+    satellite.position.copy(orbitPosition);
+    satellite.scale.setScalar(satellite.userData.baseScale * (0.88 + 0.12 * Math.sin(t * 3.2 + index)));
+    satellite.material.opacity = opacity * satellite.userData.baseOpacity;
+    satellite.visible = opacity > 0.025;
+    satellite.userData.trails.forEach((trail) => {
+      const trailStep = trail.userData.trailIndex;
+      const trailAngle = angle - Math.sign(satellite.userData.speed) * trailStep * 0.18;
+      const trailPosition = base.clone()
+        .applyAxisAngle(axis, trailAngle)
+        .multiplyScalar(satellite.userData.radius);
+      const fade = Math.pow(1 - trailStep / (satellite.userData.trails.length + 1), 0.72);
+      trail.position.copy(trailPosition);
+      trail.scale.setScalar(satellite.userData.baseScale * (0.62 + fade * 0.58));
+      trail.material.opacity = opacity * satellite.userData.baseOpacity * (0.22 + fade * 0.78);
+      trail.visible = opacity > 0.025;
+    });
+  });
+}
+
+function updateHoldNoteVisual(note, segment, opacity, t) {
+  const { head, bodyParticles } = note.mesh.userData;
+  const start = segment.head.position;
+  const end = segment.tail.position;
+  const delta = end.clone().sub(start);
+  const length = Math.max(0.001, delta.length());
+  const direction = delta.normalize();
+  const radius = 0.25 * note.mesh.userData.holdRadiusScale;
+  const axisA = note.zone.judgeLineDirection.clone().sub(direction.clone().multiplyScalar(note.zone.judgeLineDirection.dot(direction)));
+  if (axisA.lengthSq() < 0.000001) axisA.copy(note.zone.depthDirection);
+  axisA.normalize();
+  const axisB = new THREE.Vector3().crossVectors(direction, axisA).normalize();
+
+  note.mesh.position.set(0, 0, 0);
+  note.mesh.quaternion.identity();
+  head.position.copy(start);
+
+  bodyParticles.forEach((particle, index) => {
+    if (opacity <= 0.02 || length <= 0.05) {
+      particle.visible = false;
+      return;
+    }
+    const u = (particle.userData.along + 0.017 * Math.sin(index * 3.19)) % 1;
+    const radial = particle.userData.radial * radius;
+    const angle = particle.userData.angle + t * particle.userData.orbitSpeed;
+    const edgeFade = smoothstep(0.0, 0.08, u) * (1 - smoothstep(0.92, 1.0, u));
+    const localOpacity = opacity * particle.userData.baseOpacity * edgeFade;
+    const position = start.clone()
+      .lerp(end, u)
+      .add(axisA.clone().multiplyScalar(Math.cos(angle) * radial))
+      .add(axisB.clone().multiplyScalar(Math.sin(angle) * radial));
+
+    particle.position.copy(position);
+    particle.quaternion.copy(camera.quaternion);
+    particle.rotateZ(angle + particle.userData.spin);
+    particle.scale.setScalar(particle.userData.scale);
+    particle.material.opacity = localOpacity;
+    particle.visible = localOpacity > 0.02;
+  });
+
+  updateSphereNoteVisual(head, opacity, head.userData.baseScale, 0);
+  if (isSpaceNote(note)) {
+    updateSpaceSatellites({ ...note, mesh: head }, t, opacity);
+  }
+  note.mesh.visible = opacity > 0.02;
+}
+
 function updateNotes(t, chartTime) {
   const visibleNotes = [];
   notes.forEach((note) => {
+    if (isHoldNote(note)) {
+      const segment = holdSegment(note, chartTime);
+      const opacity = note.mesh.userData.baseOpacity * holdVisibility(segment.head.progress, segment.tail.progress);
+      updateHoldNoteVisual(note, segment, opacity, t);
+      if (opacity > 0.02) {
+        visibleNotes.push({
+          note,
+          progress: segment.progress,
+          timeToHit: segment.timeToHit,
+          opacity,
+          visibility: opacity,
+          connectionPosition: segment.head.position.clone(),
+          wPos: note.wPos
+        });
+      }
+      return;
+    }
+
     const { position, progress, timeToHit } = notePosition(note, chartTime);
     note.mesh.position.copy(position);
-    if (note.type !== "middle") note.mesh.quaternion.copy(note.zone.noteQuaternion);
-    const isMiddle = note.type === "middle";
-    const pulseScale = isMiddle ? Math.sin(t * 5 + note.pulse) * 0.035 : 0;
+    if (!isCentralNote(note)) note.mesh.quaternion.copy(note.zone.noteQuaternion);
+    const isCentral = isCentralNote(note);
+    const pulseScale = isCentral ? Math.sin(t * 5 + note.pulse) * 0.035 : 0;
     const scale = note.mesh.userData.baseScale * (1 + pulseScale);
     const visibility = noteVisibility(progress);
-    const hitFlash = isMiddle ? (note.mesh.userData.hitFlash ?? 0) : 0;
+    const hitFlash = isCentral ? (note.mesh.userData.hitFlash ?? 0) : 0;
     const opacity = note.mesh.userData.baseOpacity * visibility * (1 + hitFlash * 0.45);
-    const halo = note.mesh.userData.halo;
 
-    note.mesh.scale.setScalar(scale * (1 + hitFlash * 0.16));
-    setObjectOpacity(note.mesh, opacity);
-    note.mesh.visible = true;
-    if (halo) {
-      halo.visible = opacity > 0.02;
-      halo.material.opacity = opacity * halo.userData.baseOpacity;
-      halo.scale.setScalar(middleHaloScale);
-    }
-    note.mesh.userData.hitFlash = isMiddle ? Math.max(0, hitFlash - 0.08) : 0;
-    visibleNotes.push({ note, progress, timeToHit, opacity, visibility });
+    updateSphereNoteVisual(note.mesh, opacity, scale, hitFlash);
+    if (isSpaceNote(note)) updateSpaceSatellites(note, t, opacity);
+    note.mesh.userData.hitFlash = isCentral ? Math.max(0, hitFlash - 0.08) : 0;
+    visibleNotes.push({
+      note,
+      progress,
+      timeToHit,
+      opacity,
+      visibility,
+      connectionPosition: position.clone(),
+      wPos: note.wPos
+    });
   });
   return visibleNotes;
 }
@@ -1025,7 +1389,7 @@ function updateLandingHints(visibleNotes) {
 
   let hintIndex = 0;
   visibleNotes.forEach((item) => {
-    if (item.note.type !== "middle") return;
+    if (!isCentralNote(item.note)) return;
     if (item.opacity <= 0.025) return;
     const timeToHit = item.timeToHit;
     if (timeToHit < 0 || timeToHit > 1 || hintIndex >= landingHintPool.length) return;
@@ -1043,8 +1407,8 @@ function updateLandingHints(visibleNotes) {
 }
 
 function writeConnectionGeometry(line, a, b, color, opacityScale) {
-  const start = a.note.mesh.position;
-  const end = b.note.mesh.position;
+  const start = a.connectionPosition ?? a.note.mesh.position;
+  const end = b.connectionPosition ?? b.note.mesh.position;
   const delta = end.clone().sub(start);
   if (delta.length() <= 0.001) return false;
 
@@ -1091,15 +1455,18 @@ function updateMultiHitLines(visibleNotes) {
   let lineIndex = 0;
   const groups = new Map();
   visibleNotes.forEach((item) => {
-    if (item.note.type !== "middle") return;
+    if (!isCentralNote(item.note)) return;
     if (!groups.has(item.note.hitGroup)) groups.set(item.note.hitGroup, []);
     groups.get(item.note.hitGroup).push(item);
   });
 
   for (const group of groups.values()) {
-    for (let i = 0; i < group.length - 1; i += 1) {
-      const a = group[i];
-      const b = group[i + 1];
+    const sortedGroup = group
+      .filter((item) => item.opacity > 0.02)
+      .sort((a, b) => (a.wPos ?? 0) - (b.wPos ?? 0));
+    for (let i = 0; i < sortedGroup.length - 1; i += 1) {
+      const a = sortedGroup[i];
+      const b = sortedGroup[i + 1];
       if (lineIndex >= linePool.length || a.opacity <= 0.02 || b.opacity <= 0.02) continue;
       if (writeConnectionGeometry(linePool[lineIndex], a, b, palette.white, 0.34)) lineIndex += 1;
     }
@@ -1140,12 +1507,15 @@ function updateReceiver(t, beat) {
 }
 
 function updateReceiverAnchor() {
-  const target = receiverTargetAt(chartState.chartTime);
-  receiverState.targetZone = target;
-  receiverState.targetPosition.copy(target.receiverPosition);
-  receiverState.targetQuaternion.copy(target.receiverQuaternion);
-  receiverState.currentPosition.lerp(receiverState.targetPosition, 0.14);
-  receiverState.currentQuaternion.slerp(receiverState.targetQuaternion, 0.14);
+  const state = receiverStateAt(chartState.chartTime);
+  receiverState.currentZone = state.zone;
+  receiverState.targetZone = state.targetZone;
+  receiverState.currentPosition.copy(state.position);
+  receiverState.targetPosition.copy(state.targetZone.receiverPosition);
+  receiverState.currentQuaternion.copy(state.quaternion);
+  receiverState.targetQuaternion.copy(state.targetZone.receiverQuaternion);
+  receiverState.moving = state.moving;
+  receiverState.progress = state.progress;
   receiverState.anchor.copy(receiverState.currentPosition);
 }
 
@@ -1284,7 +1654,7 @@ body {
   left: 28px;
   bottom: 24px;
   display: grid;
-  grid-template-columns: auto auto auto auto auto auto;
+  grid-template-columns: auto auto auto auto auto auto auto auto;
   align-items: center;
   gap: 8px;
   color: rgba(234, 247, 255, 0.68);
@@ -1302,6 +1672,11 @@ body {
 .dot.middle {
   color: #eaf7ff;
   background: #eaf7ff;
+}
+
+.dot.space {
+  color: #ffd66b;
+  background: #ffd66b;
 }
 
 .dot.left {
