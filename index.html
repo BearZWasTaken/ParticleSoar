@@ -17,6 +17,7 @@
   <div class="legend" aria-hidden="true">
     <span class="dot middle"></span><span>middle</span>
     <span class="dot space"></span><span>space</span>
+    <span class="dot top"></span><span>top</span>
     <span class="dot left"></span><span>left</span>
     <span class="dot right"></span><span>right</span>
   </div>
@@ -24,6 +25,7 @@
     <div>pos <span id="camera-position">0, 0, 0</span></div>
     <div>target <span id="camera-target">0, 0, 0</span></div>
     <div>fov <span id="camera-fov">44</span></div>
+    <div>bg <span id="background-count">0 points / 0 triangles</span></div>
   </div>
 </div>
 
@@ -48,6 +50,7 @@ const cameraModeReadout = document.getElementById("camera-mode");
 const cameraPositionReadout = document.getElementById("camera-position");
 const cameraTargetReadout = document.getElementById("camera-target");
 const cameraFovReadout = document.getElementById("camera-fov");
+const backgroundCountReadout = document.getElementById("background-count");
 const renderer = new THREE.WebGLRenderer({
   canvas,
   antialias: true,
@@ -83,9 +86,7 @@ const camera = new THREE.PerspectiveCamera(
 
 const cameraMount = {
   configured: false,
-  referenceReceiverPosition: new THREE.Vector3(0, -10, 0),
-  initialReceiverQuaternion: new THREE.Quaternion(),
-  inverseInitialReceiverQuaternion: new THREE.Quaternion()
+  referenceReceiverPosition: new THREE.Vector3(0, -10, 0)
 };
 
 function applyCameraProfile(
@@ -111,14 +112,10 @@ function applyCameraProfile(
     offset.targetZ ?? 0
   ));
   const followPosition = cameraMount.configured
-    ? localPosition
-      .sub(cameraMount.referenceReceiverPosition)
-      .applyQuaternion(cameraMount.inverseInitialReceiverQuaternion)
+    ? localPosition.sub(cameraMount.referenceReceiverPosition)
     : localPosition;
   const followTarget = cameraMount.configured
-    ? localTarget
-      .sub(cameraMount.referenceReceiverPosition)
-      .applyQuaternion(cameraMount.inverseInitialReceiverQuaternion)
+    ? localTarget.sub(cameraMount.referenceReceiverPosition)
     : localTarget;
   const worldPosition = anchor.clone().add(followPosition.applyQuaternion(orientation));
   const worldTarget = anchor.clone().add(followTarget.applyQuaternion(orientation));
@@ -191,6 +188,7 @@ makeAxisLabel("Z", "#4f8cff").position.set(0, 0, 8.7);
 const palette = {
   white: new THREE.Color(0xeaf7ff),
   space: new THREE.Color(0xffd66b),
+  top: new THREE.Color(0x9af2c5),
   left: new THREE.Color(0x70dcff),
   right: new THREE.Color(0xff70aa)
 };
@@ -211,6 +209,23 @@ function makeHotGlowMaterial(color, opacity = 1, intensity = 1) {
   material.color.multiplyScalar(intensity);
   return material;
 }
+
+function makeSoftHaloTexture() {
+  const haloCanvas = document.createElement("canvas");
+  haloCanvas.width = 128;
+  haloCanvas.height = 128;
+  const context = haloCanvas.getContext("2d");
+  const gradient = context.createRadialGradient(64, 64, 0, 64, 64, 64);
+  gradient.addColorStop(0, "rgba(255,255,255,0.9)");
+  gradient.addColorStop(0.2, "rgba(255,255,255,0.52)");
+  gradient.addColorStop(0.55, "rgba(255,255,255,0.14)");
+  gradient.addColorStop(1, "rgba(255,255,255,0)");
+  context.fillStyle = gradient;
+  context.fillRect(0, 0, 128, 128);
+  return new THREE.CanvasTexture(haloCanvas);
+}
+
+const softHaloTexture = makeSoftHaloTexture();
 
 function makeGradientLineMaterial() {
   return new THREE.ShaderMaterial({
@@ -244,32 +259,356 @@ function makeGradientLineMaterial() {
 const matMiddle = makeHotGlowMaterial(palette.white, 0.99, 2.18);
 const matSpace = makeHotGlowMaterial(palette.space, 0.99, 2.18);
 
-const particleCount = 850;
+const backgroundConfig = {
+  cellSize: 12,
+  loadRadius: 96,
+  pointsPerCell: 15,
+  pointChance: 0.88,
+  trianglesPerCell: 2,
+  triangleChance: 0.52,
+  maxPoints: 65000,
+  maxTriangles: 5000,
+  nearFadeStart: 16,
+  nearFadeEnd: 24,
+  playfieldClearDepthFeather: 2
+};
+const sideTrajectoryPointCount = 32;
+
 const particleGeo = new THREE.BufferGeometry();
-const particlePositions = new Float32Array(particleCount * 3);
-const particleSizes = new Float32Array(particleCount);
-for (let i = 0; i < particleCount; i += 1) {
-  const r = 5 + Math.random() * 32;
-  const a = Math.random() * Math.PI * 2;
-  particlePositions[i * 3] = Math.cos(a) * r;
-  particlePositions[i * 3 + 1] = -2 + Math.random() * 17;
-  particlePositions[i * 3 + 2] = Math.sin(a) * r - 5;
-  particleSizes[i] = 0.5 + Math.random();
-}
+const particlePositions = new Float32Array(backgroundConfig.maxPoints * 3);
+const particleSizeScales = new Float32Array(backgroundConfig.maxPoints);
 particleGeo.setAttribute("position", new THREE.BufferAttribute(particlePositions, 3));
-particleGeo.setAttribute("size", new THREE.BufferAttribute(particleSizes, 1));
-const particles = new THREE.Points(
-  particleGeo,
-  new THREE.PointsMaterial({
-    color: 0xb9e8ff,
-    size: 0.045,
-    transparent: true,
-    opacity: 0.8,
-    blending: THREE.AdditiveBlending,
-    depthWrite: false
-  })
-);
+particleGeo.setAttribute("backgroundSizeScale", new THREE.BufferAttribute(particleSizeScales, 1));
+particleGeo.setDrawRange(0, 0);
+
+function installBackgroundOcclusionShader(material, cacheKey, { scalePoints = false } = {}) {
+  material.onBeforeCompile = (shader) => {
+    shader.uniforms.nearFadeStart = { value: backgroundConfig.nearFadeStart };
+    shader.uniforms.nearFadeEnd = { value: backgroundConfig.nearFadeEnd };
+    shader.uniforms.leftClearPath = { value: Array.from({ length: sideTrajectoryPointCount }, () => new THREE.Vector2(-0.3, 0)) };
+    shader.uniforms.rightClearPath = { value: Array.from({ length: sideTrajectoryPointCount }, () => new THREE.Vector2(0.3, 0)) };
+    shader.uniforms.clearPathCount = { value: 0 };
+    shader.uniforms.clearPlanePointView = { value: new THREE.Vector3(0, 0, -42) };
+    shader.uniforms.clearPlaneNormalView = { value: new THREE.Vector3(0, 0, 1) };
+    shader.uniforms.clearPlaneCameraSign = { value: 1 };
+    shader.uniforms.clearPlaneFeather = { value: backgroundConfig.playfieldClearDepthFeather };
+    material.userData.shader = shader;
+    shader.vertexShader = `
+      ${scalePoints ? "attribute float backgroundSizeScale;" : ""}
+      varying vec2 vBackgroundNdc;
+      varying float vBackgroundViewDepth;
+      varying vec3 vBackgroundViewPosition;
+      ${shader.vertexShader}
+    `
+      .replace(
+        "#include <project_vertex>",
+        `
+          #include <project_vertex>
+          vBackgroundNdc = gl_Position.xy / max(abs(gl_Position.w), 0.0001);
+          vBackgroundViewDepth = -mvPosition.z;
+          vBackgroundViewPosition = mvPosition.xyz;
+        `
+      );
+    if (scalePoints) {
+      shader.vertexShader = shader.vertexShader.replace(
+        /\}\s*$/,
+        `
+          gl_PointSize *= backgroundSizeScale;
+        }
+        `
+      );
+    }
+    shader.fragmentShader = `
+      uniform float nearFadeStart;
+      uniform float nearFadeEnd;
+      uniform vec2 leftClearPath[${sideTrajectoryPointCount}];
+      uniform vec2 rightClearPath[${sideTrajectoryPointCount}];
+      uniform int clearPathCount;
+      uniform vec3 clearPlanePointView;
+      uniform vec3 clearPlaneNormalView;
+      uniform float clearPlaneCameraSign;
+      uniform float clearPlaneFeather;
+      varying vec2 vBackgroundNdc;
+      varying float vBackgroundViewDepth;
+      varying vec3 vBackgroundViewPosition;
+      float cross2d(vec2 a, vec2 b) {
+        return a.x * b.y - a.y * b.x;
+      }
+      float insideTriangle(vec2 p, vec2 a, vec2 b, vec2 c) {
+        float d1 = cross2d(b - a, p - a);
+        float d2 = cross2d(c - b, p - b);
+        float d3 = cross2d(a - c, p - c);
+        float hasNegative = step(min(min(d1, d2), d3), -0.00001);
+        float hasPositive = step(0.00001, max(max(d1, d2), d3));
+        return 1.0 - hasNegative * hasPositive;
+      }
+      ${shader.fragmentShader}
+    `.replace(
+      /\}\s*$/,
+      `
+        float nearMask = smoothstep(nearFadeStart, nearFadeEnd, vBackgroundViewDepth);
+        float insideChannel = 0.0;
+        for (int i = 0; i < ${sideTrajectoryPointCount - 1}; i++) {
+          if (i >= clearPathCount - 1) break;
+          vec2 leftA = leftClearPath[i];
+          vec2 rightA = rightClearPath[i];
+          vec2 leftB = leftClearPath[i + 1];
+          vec2 rightB = rightClearPath[i + 1];
+          insideChannel = max(insideChannel, insideTriangle(vBackgroundNdc, leftA, rightA, rightB));
+          insideChannel = max(insideChannel, insideTriangle(vBackgroundNdc, leftA, rightB, leftB));
+        }
+        float planeDistance = dot(
+          vBackgroundViewPosition - clearPlanePointView,
+          clearPlaneNormalView
+        ) * clearPlaneCameraSign;
+        float inFront = smoothstep(-clearPlaneFeather, clearPlaneFeather, planeDistance);
+        float playfieldMask = 1.0 - insideChannel * inFront;
+        if (nearMask * playfieldMask <= 0.001) discard;
+        gl_FragColor.a *= nearMask * playfieldMask;
+      }
+      `
+    );
+  };
+  material.customProgramCacheKey = () => cacheKey;
+  return material;
+}
+
+function makeBackgroundPointMaterial() {
+  return installBackgroundOcclusionShader(
+    new THREE.PointsMaterial({
+      color: 0xb9e8ff,
+      size: 0.082,
+      transparent: true,
+      opacity: 0.40,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false
+    }),
+    "background-point-sized-trajectory-volume-v7",
+    { scalePoints: true }
+  );
+}
+
+const particles = new THREE.Points(particleGeo, makeBackgroundPointMaterial());
+particles.frustumCulled = false;
 particlesRoot.add(particles);
+
+function makeHollowEquilateralTriangleGeometry(side = 1.65, thicknessRatio = 0.38) {
+  const height = side * Math.sqrt(3) * 0.5;
+  const outer = [
+    new THREE.Vector2(0, height * 2 / 3),
+    new THREE.Vector2(side * 0.5, -height / 3),
+    new THREE.Vector2(-side * 0.5, -height / 3)
+  ];
+  const innerScale = THREE.MathUtils.clamp(1 - thicknessRatio, 0.18, 0.82);
+  const inner = outer.map((point) => point.clone().multiplyScalar(innerScale)).reverse();
+  const shape = new THREE.Shape(outer);
+  const hole = new THREE.Path(inner);
+  shape.holes.push(hole);
+  return new THREE.ShapeGeometry(shape);
+}
+
+function makeBackgroundTriangleMaterial() {
+  return installBackgroundOcclusionShader(
+    makeHotGlowMaterial(0xe8f3f7, 0.28, 1.55),
+    "background-triangle-trajectory-volume-v7"
+  );
+}
+
+const backgroundTriangleGeo = makeHollowEquilateralTriangleGeometry(0.82, 0.42);
+const backgroundTriangleMesh = new THREE.InstancedMesh(
+  backgroundTriangleGeo,
+  makeBackgroundTriangleMaterial(),
+  backgroundConfig.maxTriangles
+);
+backgroundTriangleMesh.count = 0;
+backgroundTriangleMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+backgroundTriangleMesh.frustumCulled = false;
+backgroundTriangleMesh.renderOrder = 1;
+particlesRoot.add(backgroundTriangleMesh);
+
+const backgroundActiveCell = new THREE.Vector3(Number.NaN, Number.NaN, Number.NaN);
+const backgroundInstanceMatrix = new THREE.Matrix4();
+const backgroundInstancePosition = new THREE.Vector3();
+const backgroundInstanceQuaternion = new THREE.Quaternion();
+const backgroundInstanceScale = new THREE.Vector3();
+const backgroundInstanceEuler = new THREE.Euler();
+const backgroundInstanceColor = new THREE.Color();
+const leftTrajectoryWorldPoints = Array.from({ length: sideTrajectoryPointCount }, () => new THREE.Vector3());
+const rightTrajectoryWorldPoints = Array.from({ length: sideTrajectoryPointCount }, () => new THREE.Vector3());
+const leftTrajectoryNdcPoints = Array.from({ length: sideTrajectoryPointCount }, () => new THREE.Vector3());
+const rightTrajectoryNdcPoints = Array.from({ length: sideTrajectoryPointCount }, () => new THREE.Vector3());
+let sideTrajectorySampleCount = 0;
+const backgroundReceiverViewPosition = new THREE.Vector3();
+const backgroundReceiverPlaneNormalWorld = new THREE.Vector3();
+const backgroundReceiverPlaneNormalView = new THREE.Vector3();
+
+function hashBackgroundCell(x, y, z, salt = 0) {
+  let hash = Math.imul(x, 0x1f123bb5)
+    ^ Math.imul(y, 0x5f356495)
+    ^ Math.imul(z, 0x6c8e9cf5)
+    ^ Math.imul(salt, 0x27d4eb2d);
+  hash = Math.imul(hash ^ (hash >>> 15), 0x2c1b3c6d);
+  hash = Math.imul(hash ^ (hash >>> 12), 0x297a2d39);
+  return (hash ^ (hash >>> 15)) >>> 0;
+}
+
+function backgroundRandom(x, y, z, salt) {
+  return hashBackgroundCell(x, y, z, salt) / 0x100000000;
+}
+
+function rebuildBackgroundField(force = false) {
+  const cellSize = backgroundConfig.cellSize;
+  const cellX = Math.floor(camera.position.x / cellSize);
+  const cellY = Math.floor(camera.position.y / cellSize);
+  const cellZ = Math.floor(camera.position.z / cellSize);
+  if (!force
+    && cellX === backgroundActiveCell.x
+    && cellY === backgroundActiveCell.y
+    && cellZ === backgroundActiveCell.z) return;
+
+  backgroundActiveCell.set(cellX, cellY, cellZ);
+  const loadRadius = backgroundConfig.loadRadius;
+  const loadRadiusSq = loadRadius * loadRadius;
+  const cellRadius = Math.ceil(loadRadius / cellSize);
+  const cellMargin = cellSize * Math.sqrt(3) * 0.5;
+  const cellLoadRadiusSq = (loadRadius + cellMargin) ** 2;
+  const fieldCenter = new THREE.Vector3(
+    (cellX + 0.5) * cellSize,
+    (cellY + 0.5) * cellSize,
+    (cellZ + 0.5) * cellSize
+  );
+  let pointCount = 0;
+  let triangleCount = 0;
+
+  for (let x = cellX - cellRadius; x <= cellX + cellRadius; x += 1) {
+    for (let y = cellY - cellRadius; y <= cellY + cellRadius; y += 1) {
+      for (let z = cellZ - cellRadius; z <= cellZ + cellRadius; z += 1) {
+        const centerX = (x + 0.5) * cellSize;
+        const centerY = (y + 0.5) * cellSize;
+        const centerZ = (z + 0.5) * cellSize;
+        const centerDx = centerX - fieldCenter.x;
+        const centerDy = centerY - fieldCenter.y;
+        const centerDz = centerZ - fieldCenter.z;
+        if (centerDx * centerDx + centerDy * centerDy + centerDz * centerDz
+          > cellLoadRadiusSq) continue;
+
+        for (let sample = 0; sample < backgroundConfig.pointsPerCell; sample += 1) {
+          if (pointCount >= backgroundConfig.maxPoints) break;
+          const salt = 20 + sample * 4;
+          if (backgroundRandom(x, y, z, salt) >= backgroundConfig.pointChance) continue;
+          const px = (x + backgroundRandom(x, y, z, salt + 1)) * cellSize;
+          const py = (y + backgroundRandom(x, y, z, salt + 2)) * cellSize;
+          const pz = (z + backgroundRandom(x, y, z, salt + 3)) * cellSize;
+          const dx = px - fieldCenter.x;
+          const dy = py - fieldCenter.y;
+          const dz = pz - fieldCenter.z;
+          if (dx * dx + dy * dy + dz * dz > loadRadiusSq) continue;
+          const offset = pointCount * 3;
+          particlePositions[offset] = px;
+          particlePositions[offset + 1] = py;
+          particlePositions[offset + 2] = pz;
+          particleSizeScales[pointCount] = 1 + backgroundRandom(x, y, z, salt + 1000);
+          pointCount += 1;
+        }
+
+        for (let sample = 0; sample < backgroundConfig.trianglesPerCell; sample += 1) {
+          if (triangleCount >= backgroundConfig.maxTriangles) break;
+          const salt = 140 + sample * 14;
+          if (backgroundRandom(x, y, z, salt) >= backgroundConfig.triangleChance) continue;
+          const px = (x + backgroundRandom(x, y, z, salt + 1)) * cellSize;
+          const py = (y + backgroundRandom(x, y, z, salt + 2)) * cellSize;
+          const pz = (z + backgroundRandom(x, y, z, salt + 3)) * cellSize;
+          const dx = px - fieldCenter.x;
+          const dy = py - fieldCenter.y;
+          const dz = pz - fieldCenter.z;
+          if (dx * dx + dy * dy + dz * dz > loadRadiusSq) continue;
+          backgroundInstancePosition.set(px, py, pz);
+          backgroundInstanceEuler.set(
+            (backgroundRandom(x, y, z, salt + 4) - 0.5) * 0.35,
+            (backgroundRandom(x, y, z, salt + 5) - 0.5) * 0.35,
+            backgroundRandom(x, y, z, salt + 6) * Math.PI * 2
+          );
+          backgroundInstanceQuaternion.setFromEuler(backgroundInstanceEuler);
+          const scale = 0.52 + backgroundRandom(x, y, z, salt + 7) * 0.72;
+          backgroundInstanceScale.setScalar(scale);
+          backgroundInstanceMatrix.compose(
+            backgroundInstancePosition,
+            backgroundInstanceQuaternion,
+            backgroundInstanceScale
+          );
+          backgroundTriangleMesh.setMatrixAt(triangleCount, backgroundInstanceMatrix);
+          backgroundInstanceColor.set(0xe8f3f7)
+            .multiplyScalar(0.58 + backgroundRandom(x, y, z, salt + 8) * 0.5);
+          backgroundTriangleMesh.setColorAt(triangleCount, backgroundInstanceColor);
+          triangleCount += 1;
+        }
+      }
+    }
+  }
+
+  particleGeo.setDrawRange(0, pointCount);
+  particleGeo.getAttribute("position").needsUpdate = true;
+  particleGeo.getAttribute("backgroundSizeScale").needsUpdate = true;
+  backgroundTriangleMesh.count = triangleCount;
+  backgroundTriangleMesh.instanceMatrix.needsUpdate = true;
+  if (backgroundTriangleMesh.instanceColor) backgroundTriangleMesh.instanceColor.needsUpdate = true;
+}
+
+function updateBackgroundParticles() {
+  particlesRoot.position.set(0, 0, 0);
+  particlesRoot.quaternion.identity();
+  rebuildBackgroundField();
+
+  camera.updateMatrixWorld(true);
+  for (let i = 0; i < sideTrajectorySampleCount; i += 1) {
+    leftTrajectoryNdcPoints[i].copy(leftTrajectoryWorldPoints[i]).project(camera);
+    rightTrajectoryNdcPoints[i].copy(rightTrajectoryWorldPoints[i]).project(camera);
+  }
+  backgroundReceiverViewPosition
+    .copy(receiverState.currentPosition)
+    .applyMatrix4(camera.matrixWorldInverse);
+  backgroundReceiverPlaneNormalWorld
+    .set(0, 0, 1)
+    .applyQuaternion(receiverState.currentQuaternion)
+    .normalize();
+  backgroundReceiverPlaneNormalView
+    .copy(backgroundReceiverPlaneNormalWorld)
+    .transformDirection(camera.matrixWorldInverse);
+
+  const clearPlaneCameraSign = Math.sign(
+    -backgroundReceiverViewPosition.dot(backgroundReceiverPlaneNormalView)
+  ) || 1;
+  const planeValuesAreFinite = Number.isFinite(backgroundReceiverViewPosition.x)
+    && Number.isFinite(backgroundReceiverViewPosition.y)
+    && Number.isFinite(backgroundReceiverViewPosition.z)
+    && Number.isFinite(backgroundReceiverPlaneNormalView.x)
+    && Number.isFinite(backgroundReceiverPlaneNormalView.y)
+    && Number.isFinite(backgroundReceiverPlaneNormalView.z)
+    && Number.isFinite(clearPlaneCameraSign);
+  if (!planeValuesAreFinite) return;
+  for (let i = 0; i < sideTrajectorySampleCount; i += 1) {
+    const leftPoint = leftTrajectoryNdcPoints[i];
+    const rightPoint = rightTrajectoryNdcPoints[i];
+    if (!Number.isFinite(leftPoint.x)
+      || !Number.isFinite(leftPoint.y)
+      || !Number.isFinite(rightPoint.x)
+      || !Number.isFinite(rightPoint.y)) return;
+  }
+
+  const updateObstructionVolume = (shader) => {
+    if (!shader) return;
+    for (let i = 0; i < sideTrajectorySampleCount; i += 1) {
+      shader.uniforms.leftClearPath.value[i].copy(leftTrajectoryNdcPoints[i]);
+      shader.uniforms.rightClearPath.value[i].copy(rightTrajectoryNdcPoints[i]);
+    }
+    shader.uniforms.clearPathCount.value = sideTrajectorySampleCount;
+    shader.uniforms.clearPlanePointView.value.copy(backgroundReceiverViewPosition);
+    shader.uniforms.clearPlaneNormalView.value.copy(backgroundReceiverPlaneNormalView);
+    shader.uniforms.clearPlaneCameraSign.value = clearPlaneCameraSign;
+  };
+  updateObstructionVolume(particles.material.userData.shader);
+  updateObstructionVolume(backgroundTriangleMesh.material.userData.shader);
+}
 
 const sphereGeo = new THREE.SphereGeometry(0.25, 32, 18);
 const noteHaloGeo = new THREE.SphereGeometry(0.25, 32, 18);
@@ -278,10 +617,16 @@ const middleHaloScale = 1.62;
 const notes = [];
 const linePool = [];
 const landingHintPool = [];
+const holdRenderPosition = new THREE.Vector3();
+const holdRenderDelta = new THREE.Vector3();
+const holdRenderDirection = new THREE.Vector3();
+const holdRenderAxisA = new THREE.Vector3();
+const holdRenderAxisB = new THREE.Vector3();
 
 const timingConfig = {
   chartDuration: 8.4,
   flowSpeed: 11.75,
+  staticNoteLeadSeconds: 2.15,
   postHitSeconds: 0.38,
   receiverMoveSeconds: 0.28
 };
@@ -289,54 +634,76 @@ const timingConfig = {
 const playfieldConfig = {
   noteStartY: 20.0,
   noteHitY: -10.0,
-  receiverRadius: 5.65,
+  receiverRadius: 7.0,
   zSpread: 0.82,
-  zoneStepX: 8.8
+  sideLaneX: 10.75,
+  specialNoteRadiusRatio: 0.5
 };
 
 const renderConfig = {
   pooledConnections: 72,
   pooledLandingHints: 72,
   receiverParticles: 46,
-  multiHitLineWidth: 0.063
+  multiHitLineWidth: 0.0315,
+  constellationLineOpacity: 0.12,
+  multiHitLineOpacity: 0.34
 };
 
 const chartState = {
-  chart: null,
   startTime: 0,
   chartTime: 0,
+  motionMode: "notes-fall",
   flowSpeedTimeline: null,
   cameraTimelines: {},
-  receiverEvents: [],
-  receiverTransitions: []
+  receiverTrajectory: null
 };
 
 const receiverState = {
   anchor: new THREE.Vector3(0, playfieldConfig.noteHitY, 0),
   currentPosition: new THREE.Vector3(0, playfieldConfig.noteHitY, 0),
-  targetPosition: new THREE.Vector3(0, playfieldConfig.noteHitY, 0),
   currentQuaternion: new THREE.Quaternion(),
-  targetQuaternion: new THREE.Quaternion(),
-  currentZone: null,
-  targetZone: null,
-  moving: false,
-  progress: 0
 };
 
 const clock = new THREE.Clock();
 
-function getTargetForNote(note) {
+function getLandingHintTransform(note) {
+  if (chartState.motionMode === "receiver-catch") {
+    const pose = {
+      position: receiverState.currentPosition,
+      quaternion: receiverState.currentQuaternion
+    };
+    return {
+      position: pointFromReceiverPose(
+        pose,
+        note.localX ?? note.wPos ?? 0,
+        note.depthOffset ?? 0
+      ),
+      quaternion: receiverState.currentQuaternion
+    };
+  }
+  const zone = note.zone;
   return {
-    position: note.hitPosition.clone()
+    position: localPointInZone(zone, note.localX ?? note.wPos ?? 0, note.depthOffset ?? 0),
+    quaternion: zone.receiverQuaternion
   };
+}
+
+function zoneFromReceiverPose(pose, fallback = createDropZone()) {
+  const judgeLineDirection = new THREE.Vector3(1, 0, 0).applyQuaternion(pose.quaternion).normalize();
+  const fallDirection = new THREE.Vector3(0, -1, 0).applyQuaternion(pose.quaternion).normalize();
+  return createDropZone({
+    receiverPosition: pose.position,
+    judgeLineDirection,
+    fallDirection
+  }, fallback);
 }
 
 function laneX(lane, phase) {
   return -4.2 + ((lane * 1.68 + phase * 9.6) % 8.4);
 }
 
-function defaultZOffset(seed) {
-  return Math.sin(seed * 37.0) * playfieldConfig.zSpread;
+function randomDepthOffset() {
+  return (Math.random() * 2 - 1) * playfieldConfig.zSpread;
 }
 
 function normalizeVector(value, fallback) {
@@ -528,6 +895,67 @@ function buildReceiverTimeline(rawEvents = []) {
   return { events, transitions };
 }
 
+function normalizeReceiverMotion(rawMotion = {}) {
+  const values = Array.isArray(rawMotion)
+    ? rawMotion
+    : rawMotion.values ?? rawMotion.directionSpeed ?? [
+      rawMotion.azimuth ?? 0,
+      rawMotion.elevation ?? 0,
+      rawMotion.speed ?? 0
+    ];
+  return {
+    azimuth: values[0] ?? 0,
+    elevation: values[1] ?? 0,
+    speed: values[2] ?? 0,
+    azimuthVelocity: rawMotion.azimuthVelocity ?? 0,
+    sampleSeconds: rawMotion.sampleSeconds ?? 0.2,
+    origin: toVector3(rawMotion.origin, new THREE.Vector3(0, playfieldConfig.noteHitY, 0))
+  };
+}
+
+function receiverZoneAtMotionTime(motion, time) {
+  const horizontalSpeed = motion.speed * Math.cos(motion.elevation);
+  const verticalSpeed = motion.speed * Math.sin(motion.elevation);
+  const angularSpeed = motion.azimuthVelocity;
+  const currentAzimuth = motion.azimuth + angularSpeed * time;
+  const movementDirection = directionFromAngles(currentAzimuth, motion.elevation);
+  const receiverPosition = motion.origin.clone();
+  if (Math.abs(angularSpeed) < 0.000001) {
+    receiverPosition.add(
+      directionFromAngles(motion.azimuth, motion.elevation)
+        .multiplyScalar(motion.speed * time)
+    );
+  } else {
+    receiverPosition.add(new THREE.Vector3(
+      horizontalSpeed / angularSpeed * (Math.sin(currentAzimuth) - Math.sin(motion.azimuth)),
+      verticalSpeed * time,
+      horizontalSpeed / angularSpeed * (Math.cos(motion.azimuth) - Math.cos(currentAzimuth))
+    ));
+  }
+  const judgeLineDirection = Math.abs(angularSpeed) < 0.000001
+    ? new THREE.Vector3(1, 0, 0)
+    : new THREE.Vector3(-Math.sin(currentAzimuth), 0, Math.cos(currentAzimuth)).normalize();
+  return {
+    receiverPosition: receiverPosition.toArray(),
+    judgeLineDirection: judgeLineDirection.toArray(),
+    fallDirection: movementDirection.clone().negate().toArray()
+  };
+}
+
+function buildReceiverEventsFromMotion(rawMotion, duration) {
+  const motion = normalizeReceiverMotion(rawMotion);
+  const events = [{ hitTime: 0, moveSeconds: 0, ...receiverZoneAtMotionTime(motion, 0) }];
+  for (let t = motion.sampleSeconds; t <= duration + 0.01; t += motion.sampleSeconds) {
+    events.push({
+      hitTime: Math.max(0, t - motion.sampleSeconds),
+      moveSeconds: motion.sampleSeconds,
+      curve: "linear",
+      ...receiverZoneAtMotionTime(motion, Math.min(t, duration))
+    });
+  }
+  return events;
+}
+
 function transitionProgress(transition, chartTime) {
   const duration = Math.max(0.0001, transition.endTime - transition.startTime);
   const raw = THREE.MathUtils.clamp((chartTime - transition.startTime) / duration, 0, 1);
@@ -538,63 +966,95 @@ function transitionProgress(transition, chartTime) {
 }
 
 function interpolateReceiverZones(fromZone, toZone, progress) {
-  const position = fromZone.receiverPosition.clone().lerp(toZone.receiverPosition, progress);
-  const quaternion = fromZone.receiverQuaternion.clone().slerp(toZone.receiverQuaternion, progress);
   return {
-    zone: progress < 1 ? fromZone : toZone,
-    targetZone: toZone,
-    position,
-    quaternion,
-    moving: progress > 0 && progress < 1,
-    progress
+    position: fromZone.receiverPosition.clone().lerp(toZone.receiverPosition, progress),
+    quaternion: fromZone.receiverQuaternion.clone().slerp(toZone.receiverQuaternion, progress)
   };
 }
 
-function receiverStateAt(chartTime) {
-  const events = chartState.receiverEvents;
+function lastItemAtOrBefore(items, chartTime, getTime) {
+  let low = 0;
+  let high = items.length - 1;
+  let result = -1;
+  while (low <= high) {
+    const middle = (low + high) >> 1;
+    if (getTime(items[middle]) <= chartTime) {
+      result = middle;
+      low = middle + 1;
+    } else {
+      high = middle - 1;
+    }
+  }
+  return result;
+}
+
+function sampleReceiverTimeline(events, transitions, chartTime) {
   if (events.length === 0) {
     const zone = createDropZone();
     return {
-      zone,
-      targetZone: zone,
       position: zone.receiverPosition.clone(),
-      quaternion: zone.receiverQuaternion.clone(),
-      moving: false,
-      progress: 0
+      quaternion: zone.receiverQuaternion.clone()
     };
   }
 
-  for (const transition of chartState.receiverTransitions) {
-    if (transition.startTime <= chartTime && chartTime < transition.endTime) {
-      return interpolateReceiverZones(
-        transition.fromZone,
-        transition.toZone,
-        transitionProgress(transition, chartTime)
-      );
-    }
+  const transitionIndex = lastItemAtOrBefore(transitions, chartTime, (transition) => transition.startTime);
+  const transition = transitions[transitionIndex];
+  if (transition && chartTime < transition.endTime) {
+    return interpolateReceiverZones(
+      transition.fromZone,
+      transition.toZone,
+      transitionProgress(transition, chartTime)
+    );
   }
 
-  let activeEvent = events[0];
-  for (const event of events) {
-    if (event.hitTime > chartTime) break;
-    activeEvent = event;
-  }
+  const eventIndex = Math.max(0, lastItemAtOrBefore(events, chartTime, (event) => event.hitTime));
+  const activeEvent = events[eventIndex];
   return {
-    zone: activeEvent.zone,
-    targetZone: activeEvent.zone,
     position: activeEvent.zone.receiverPosition.clone(),
-    quaternion: activeEvent.zone.receiverQuaternion.clone(),
-    moving: false,
-    progress: 1
+    quaternion: activeEvent.zone.receiverQuaternion.clone()
   };
+}
+
+function pointFromReceiverPose(pose, localX = 0, depthOffset = 0, target = new THREE.Vector3()) {
+  return target
+    .set(localX, 0, -depthOffset)
+    .applyQuaternion(pose.quaternion)
+    .add(pose.position);
+}
+
+function createReceiverTrajectory(events, transitions, duration) {
+  const fixedEvents = [...events];
+  const fixedTransitions = [...transitions];
+  const sample = (chartTime) => sampleReceiverTimeline(fixedEvents, fixedTransitions, chartTime);
+  return Object.freeze({
+    duration,
+    sample,
+    pointAt(chartTime, localX = 0, depthOffset = 0, target = new THREE.Vector3()) {
+      return pointFromReceiverPose(sample(chartTime), localX, depthOffset, target);
+    }
+  });
+}
+
+function sampleReceiverPose(chartTime) {
+  return chartState.receiverTrajectory.sample(chartTime);
 }
 
 function createNoteMesh(kind = "middle") {
   const isSpace = kind === "space";
-  const mesh = new THREE.Mesh(sphereGeo, (isSpace ? matSpace : matMiddle).clone());
+  const color = isSpace
+    ? palette.space
+    : kind === "left"
+      ? palette.left
+      : kind === "right"
+        ? palette.right
+        : palette.white;
+  const mesh = new THREE.Mesh(
+    sphereGeo,
+    isSpace ? matSpace.clone() : kind === "middle" ? matMiddle.clone() : makeHotGlowMaterial(color, 0.99, 2.18)
+  );
   const halo = new THREE.Mesh(
     noteHaloGeo,
-    makeHotGlowMaterial(isSpace ? palette.space : 0xffffff, 0.56, 1.9)
+    makeHotGlowMaterial(color, 0.56, 1.9)
   );
   halo.userData.baseOpacity = 0.56;
   halo.scale.setScalar(middleHaloScale);
@@ -700,32 +1160,60 @@ function makeChevronGeometry(direction, width, height, thickness) {
   return new THREE.ShapeGeometry(shape);
 }
 
-function createSideNoteMesh(direction) {
+function makeTopArrowGeometry(width, height) {
+  const w = width * 0.5;
+  const h = height * 0.5;
+  const shape = new THREE.Shape([
+    new THREE.Vector2(-w, -h * 0.62),
+    new THREE.Vector2(-w, h * 0.26),
+    new THREE.Vector2(-w * 0.16, h * 0.84),
+    new THREE.Vector2(0, h),
+    new THREE.Vector2(w * 0.16, h * 0.84),
+    new THREE.Vector2(w, h * 0.26),
+    new THREE.Vector2(w, -h * 0.62),
+    new THREE.Vector2(0, -h * 0.02)
+  ]);
+  return new THREE.ShapeGeometry(shape);
+}
+
+function createLayeredArrowNote(geometry, color, haloSize = 3.8) {
   const group = new THREE.Group();
-  const color = direction === "left" ? palette.left : palette.right;
-  const material = makeHotGlowMaterial(color, 0.98, 2.36);
-  const glowMaterial = makeHotGlowMaterial(color, 0.76, 3.55);
-  const chevronGeo = makeChevronGeometry(direction, 0.96, 0.96, 0.23);
-  const chevronCount = 4;
-  const step = playfieldConfig.receiverRadius * 0.28;
-  const sideCenter = (direction === "left" ? -1 : 1) * playfieldConfig.receiverRadius * 0.46;
-
-  for (let i = 0; i < chevronCount; i += 1) {
-    const baseX = sideCenter + (i - (chevronCount - 1) / 2) * step;
-    const glow = new THREE.Mesh(chevronGeo, glowMaterial.clone());
-    const chevron = new THREE.Mesh(chevronGeo, material.clone());
-    glow.position.set(baseX, 0, -0.01);
-    chevron.position.set(baseX, 0, 0);
-    glow.scale.setScalar(1.28);
-    glow.userData.opacityScale = 1;
-    chevron.userData.opacityScale = 1;
-    group.add(glow, chevron);
-  }
-
+  const softHalo = new THREE.Sprite(new THREE.SpriteMaterial({
+    map: softHaloTexture,
+    color,
+    transparent: true,
+    opacity: 0.48,
+    blending: THREE.AdditiveBlending,
+    depthTest: false,
+    depthWrite: false
+  }));
+  const outerGlow = new THREE.Mesh(geometry, makeHotGlowMaterial(color, 0.34, 2.85));
+  const glow = new THREE.Mesh(geometry, makeHotGlowMaterial(color, 0.72, 2.6));
+  const arrow = new THREE.Mesh(geometry, makeHotGlowMaterial(color, 0.99, 2.75));
+  softHalo.scale.setScalar(haloSize);
+  softHalo.userData.opacityScale = 0.48;
+  outerGlow.scale.setScalar(1.58);
+  outerGlow.position.z = -0.02;
+  glow.scale.setScalar(1.3);
+  glow.position.z = -0.01;
+  outerGlow.userData.opacityScale = 0.34;
+  glow.userData.opacityScale = 0.72;
+  arrow.userData.opacityScale = 1;
+  group.add(softHalo, outerGlow, glow, arrow);
   group.userData.baseScale = 1;
   group.userData.baseOpacity = 1;
   notesRoot.add(group);
   return group;
+}
+
+function createSideNoteMesh(direction) {
+  const color = direction === "left" ? palette.left : palette.right;
+  const geometry = makeChevronGeometry(direction, 1.25, 1.25, 0.3);
+  return createLayeredArrowNote(geometry, color);
+}
+
+function createTopNoteMesh() {
+  return createLayeredArrowNote(makeTopArrowGeometry(1.9, 1.35), palette.top, 4.2);
 }
 
 function isHoldNote(noteOrType) {
@@ -738,6 +1226,25 @@ function isSpaceNote(noteOrType) {
   return type === "space" || type === "spaceHold";
 }
 
+function isMiddleNote(noteOrType) {
+  const type = typeof noteOrType === "string" ? noteOrType : noteOrType.type;
+  return type === "middle" || type === "hold" || type === "middleHold";
+}
+
+function isTopNote(noteOrType) {
+  const type = typeof noteOrType === "string" ? noteOrType : noteOrType.type;
+  return type === "top";
+}
+
+function isSpecialChordNote(noteOrType) {
+  return isSpaceNote(noteOrType) || isTopNote(noteOrType);
+}
+
+function isSideNote(noteOrType) {
+  const type = typeof noteOrType === "string" ? noteOrType : noteOrType.type;
+  return type === "left" || type === "right";
+}
+
 function holdKind(type) {
   return type === "spaceHold" ? "space" : "middle";
 }
@@ -747,21 +1254,72 @@ function isCentralNote(noteOrType) {
   return type === "middle" || type === "space" || isHoldNote(type);
 }
 
+function isPlayableNote(noteOrType) {
+  return isCentralNote(noteOrType) || isSideNote(noteOrType) || isTopNote(noteOrType);
+}
+
+function defaultLocalXForType(type, lane, phase) {
+  if (type === "left") return -playfieldConfig.sideLaneX;
+  if (type === "right") return playfieldConfig.sideLaneX;
+  return laneX(lane, phase);
+}
+
+function removeDuplicateSpecialNotes(chartNotes) {
+  const seenByTypeAndGroup = new Set();
+  return chartNotes.filter((note) => {
+    if (!isSpecialChordNote(note)) return true;
+    const group = note.hitGroup ?? note.group ?? note.hitTime;
+    const key = `${isSpaceNote(note) ? "space" : "top"}:${group}`;
+    if (seenByTypeAndGroup.has(key)) return false;
+    seenByTypeAndGroup.add(key);
+    return true;
+  });
+}
+
 function spawnNote(rawNote, index = 0) {
   const hitTime = rawNote.hitTime ?? rawNote.time ?? 0;
   const endTime = rawNote.endTime ?? rawNote.releaseTime ?? (rawNote.duration !== undefined ? hitTime + rawNote.duration : hitTime);
   const phase = ((hitTime ?? 0) / timingConfig.chartDuration) % 1;
   const lane = rawNote.lane ?? 0;
   const type = rawNote.type ?? "middle";
-  const localX = isCentralNote(type)
-    ? (rawNote.localX ?? rawNote.x ?? laneX(lane, phase))
-    : 0;
-  const depthOffset = rawNote.depthOffset ?? rawNote.z ?? defaultZOffset(rawNote.zSeed ?? phase);
-  const zone = createDropZone(rawNote.zone ?? rawNote, createDropZone());
-  const hitPosition = toVector3(
-    rawNote.hitPosition ?? rawNote.targetPosition,
-    localPointInZone(zone, localX, depthOffset)
-  );
+  const localX = isSpecialChordNote(type)
+    ? 0
+    : isPlayableNote(type)
+      ? (rawNote.localX ?? rawNote.x ?? defaultLocalXForType(type, lane, phase))
+      : 0;
+  const depthOffset = isSpaceNote(type)
+    ? -playfieldConfig.receiverRadius * playfieldConfig.specialNoteRadiusRatio
+    : isTopNote(type)
+      ? playfieldConfig.receiverRadius * playfieldConfig.specialNoteRadiusRatio
+      : isSideNote(type)
+        ? 0
+        : randomDepthOffset();
+  const followsReceiverTrajectory = chartState.motionMode === "receiver-catch"
+    && chartState.receiverTrajectory;
+  const hitPose = followsReceiverTrajectory
+    ? chartState.receiverTrajectory.sample(hitTime)
+    : null;
+  const zone = hitPose
+    ? zoneFromReceiverPose(hitPose)
+    : createDropZone(rawNote.zone ?? rawNote, createDropZone());
+  const hitPosition = followsReceiverTrajectory
+    ? pointFromReceiverPose(hitPose, localX, depthOffset)
+    : toVector3(
+      rawNote.hitPosition ?? rawNote.targetPosition,
+      localPointInZone(zone, localX, depthOffset)
+    );
+  const tailPose = followsReceiverTrajectory
+    ? chartState.receiverTrajectory.sample(endTime)
+    : null;
+  const tailZone = tailPose
+    ? zoneFromReceiverPose(tailPose, zone)
+    : createDropZone(rawNote.tailZone ?? rawNote.endZone ?? rawNote.releaseZone ?? rawNote.zone ?? rawNote, zone);
+  const tailHitPosition = followsReceiverTrajectory
+    ? pointFromReceiverPose(tailPose, localX, depthOffset)
+    : toVector3(
+      rawNote.tailHitPosition ?? rawNote.endPosition ?? rawNote.releasePosition,
+      localPointInZone(tailZone, localX, depthOffset)
+    );
   const travelDistance = rawNote.travelDistance
     ?? zone.travelDistance
     ?? Math.abs((rawNote.startY ?? playfieldConfig.noteStartY) - playfieldConfig.noteHitY);
@@ -769,14 +1327,15 @@ function spawnNote(rawNote, index = 0) {
     rawNote.startPosition,
     hitPosition.clone().sub(zone.fallDirection.clone().multiplyScalar(travelDistance))
   );
-  const receiverZone = createDropZone(rawNote.receiverZone ?? rawNote.targetZone ?? rawNote, zone);
   const mesh = isHoldNote(type)
     ? createHoldNoteMesh(holdKind(type))
     : isCentralNote(type)
       ? createNoteMesh(type)
-      : createSideNoteMesh(type);
+      : isTopNote(type)
+        ? createTopNoteMesh()
+        : createSideNoteMesh(type);
   if (!isCentralNote(type)) mesh.quaternion.copy(zone.noteQuaternion);
-  notes.push({
+  const note = {
     mesh,
     type,
     lane,
@@ -788,12 +1347,14 @@ function spawnNote(rawNote, index = 0) {
     zone,
     startPosition,
     hitPosition,
-    receiverZone,
+    tailHitPosition,
     hitGroup: rawNote.hitGroup ?? rawNote.group ?? `note-${index}`,
     pulse: Math.random() * 10,
     judged: false,
     hit: false
-  });
+  };
+  if (isHoldNote(note)) note.holdTrajectory = buildHoldTrajectory(note);
+  notes.push(note);
 }
 
 function clearNotes() {
@@ -817,6 +1378,7 @@ function toVector3(value, fallback) {
 function applyChartSettings(chart) {
   if (chart.timing) Object.assign(timingConfig, chart.timing);
   if (chart.playfield) Object.assign(playfieldConfig, chart.playfield);
+  chartState.motionMode = chart.motionMode ?? chart.motion?.mode ?? "notes-fall";
   chartState.flowSpeedTimeline = normalizeTimeline(
     chart.timelines?.FlowSpeed ?? chart.timelines?.flowSpeed ?? [],
     timingConfig.flowSpeed
@@ -830,9 +1392,15 @@ function applyChartSettings(chart) {
     targetZ: normalizeTimeline(chart.timelines?.CameraTargetZ ?? [], 0),
     fov: normalizeTimeline(chart.timelines?.CameraFov ?? [], 0)
   };
-  const receiverTimeline = buildReceiverTimeline(chart.receiverEvents ?? []);
-  chartState.receiverEvents = receiverTimeline.events;
-  chartState.receiverTransitions = receiverTimeline.transitions;
+  const receiverSourceEvents = chart.receiverMotion
+    ? buildReceiverEventsFromMotion(chart.receiverMotion, timingConfig.chartDuration)
+    : chart.receiverEvents ?? [];
+  const receiverTimeline = buildReceiverTimeline(receiverSourceEvents);
+  chartState.receiverTrajectory = createReceiverTrajectory(
+    receiverTimeline.events,
+    receiverTimeline.transitions,
+    timingConfig.chartDuration
+  );
   if (chart.camera) {
     const cameraSettings = chart.camera;
     cameraProfile.fov = cameraSettings.fov ?? cameraProfile.fov;
@@ -846,81 +1414,52 @@ function applyChartSettings(chart) {
   }
 }
 
-function configureCameraMount() {
+function configureCameraMount(initialReceiverState) {
   cameraMount.configured = true;
-  cameraMount.referenceReceiverPosition.set(0, playfieldConfig.noteHitY, 0);
-  cameraMount.initialReceiverQuaternion.identity();
-  cameraMount.inverseInitialReceiverQuaternion.identity();
+  cameraMount.referenceReceiverPosition.copy(initialReceiverState.position);
 }
 
 function loadChart(chart) {
-  chartState.chart = chart;
   chartState.startTime = clock?.getElapsedTime?.() ?? 0;
   chartState.chartTime = 0;
   cameraMount.configured = false;
   applyChartSettings(chart);
-  const initialReceiverState = receiverStateAt(0);
-  const initialZone = initialReceiverState.zone;
-  configureCameraMount();
-  receiverState.currentZone = initialZone;
-  receiverState.targetZone = initialReceiverState.targetZone;
+  const initialReceiverState = sampleReceiverPose(0);
+  configureCameraMount(initialReceiverState);
   receiverState.currentPosition.copy(initialReceiverState.position);
-  receiverState.targetPosition.copy(initialReceiverState.targetZone.receiverPosition);
   receiverState.currentQuaternion.copy(initialReceiverState.quaternion);
-  receiverState.targetQuaternion.copy(initialReceiverState.targetZone.receiverQuaternion);
-  receiverState.moving = initialReceiverState.moving;
-  receiverState.progress = initialReceiverState.progress;
   receiverState.anchor.copy(receiverState.currentPosition);
   syncPlayfieldVisuals();
   clearNotes();
-  chart.notes.forEach((note, index) => spawnNote(note, index));
+  removeDuplicateSpecialNotes(chart.notes).forEach((note, index) => spawnNote(note, index));
+  rebuildBackgroundField();
 }
 
 function createDemoChart() {
   const beatCount = 32;
   const duration = 11.2;
   const chartNotes = [];
-  const receiverEvents = [];
-  const prismCenter = new THREE.Vector3(0, playfieldConfig.noteHitY, 0);
-  const prismApothem = 18.6;
-  const fallDirection = new THREE.Vector3(0, -1, 0);
-
-  const faceAt = (step) => {
-    const normalAngle = -step * Math.PI / 4;
-    const faceNormal = new THREE.Vector3(Math.cos(normalAngle), 0, Math.sin(normalAngle)).normalize();
-    const judgeLineDirection = new THREE.Vector3().crossVectors(fallDirection, faceNormal).normalize();
-    return {
-      faceNormal,
-      judgeLineDirection,
-      fallDirection,
-      receiverPosition: prismCenter.clone().add(faceNormal.clone().multiplyScalar(prismApothem))
-    };
+  const receiverMotion = {
+    values: [0, 1.0, 10],
+    azimuthVelocity: 0.42,
+    sampleSeconds: 0.04,
+    origin: [0, playfieldConfig.noteHitY, 0]
   };
-
-  const zonePayload = (face) => ({
-    receiverPosition: face.receiverPosition.toArray(),
-    judgeLineDirection: face.judgeLineDirection.toArray(),
-    fallDirection: face.fallDirection.toArray()
-  });
-
-  let currentFaceIndex = 0;
-  let currentFace = faceAt(currentFaceIndex);
-  receiverEvents.push({ hitTime: 0, ...zonePayload(currentFace) });
 
   const tripleHitTime = 1.05;
   const tripleGroup = "triple-hold-space-test";
   [
-    { type: "hold", localX: -2.8, depthOffset: -0.18, endTime: tripleHitTime + 1.25 },
-    { type: "spaceHold", localX: 0, depthOffset: 0.12, endTime: tripleHitTime + 1.05 },
-    { type: "middle", localX: 2.8, depthOffset: 0.32 }
+    { type: "hold", localX: -2.8, endTime: tripleHitTime + 1.25 },
+    { type: "spaceHold", localX: 0, endTime: tripleHitTime + 1.05 },
+    { type: "top" },
+    { type: "middle", localX: 2.8 }
   ].forEach((note, lane) => {
     chartNotes.push({
       ...note,
       lane,
       hitTime: tripleHitTime,
       hitGroup: tripleGroup,
-      wPos: note.localX,
-      zone: zonePayload(currentFace)
+      wPos: note.localX
     });
   });
 
@@ -931,7 +1470,6 @@ function createDemoChart() {
     const hitGroup = `g-${i}`;
     const add = (lane) => {
       const localX = laneX(lane, phase);
-      const depthOffset = defaultZOffset(phase + lane * 0.07);
       const isHold = i % 8 === 5;
       const isSpaceHold = isHold && i % 16 === 13;
       const isSpace = !isHold && i % 6 === 4;
@@ -941,9 +1479,7 @@ function createDemoChart() {
         localX,
         hitTime,
         ...(isHold ? { endTime: Math.min(hitTime + 0.9, duration - 0.15) } : {}),
-        hitGroup,
-        depthOffset,
-        zone: zonePayload(currentFace)
+        hitGroup
       });
     };
     if (phrase === 0) {
@@ -958,25 +1494,23 @@ function createDemoChart() {
     }
 
     if (phrase === 3) {
-      const nextFace = faceAt(currentFaceIndex + 1);
       chartNotes.push({
-        type: "left",
+        type: i % 8 === 3 ? "left" : "right",
         hitTime,
-        hitGroup: `side-${i}`,
-        zone: zonePayload(currentFace),
-        receiverZone: zonePayload(nextFace)
+        hitGroup
       });
-      receiverEvents.push({ hitTime, ...zonePayload(nextFace) });
-      currentFaceIndex += 1;
-      currentFace = nextFace;
+    }
+    if (i % 8 === 2) {
+      chartNotes.push({ type: "top", hitTime, hitGroup });
     }
   }
   return {
     meta: { title: "mock", format: "ParticleSoarChart/v0" },
+    motionMode: "receiver-catch",
+    receiverMotion,
     timing: { ...timingConfig, chartDuration: duration },
     playfield: { ...playfieldConfig },
     timelines: { FlowSpeed: [] },
-    receiverEvents,
     notes: chartNotes
   };
 }
@@ -996,36 +1530,8 @@ for (let i = 0; i < renderConfig.pooledConnections; i += 1) acquireLine();
 const receiverGroup = new THREE.Group();
 receiverGroup.position.set(0, playfieldConfig.noteHitY, 0);
 scene.add(receiverGroup);
-
-const octagonGuide = new THREE.LineLoop(
-  new THREE.BufferGeometry(),
-  new THREE.LineBasicMaterial({
-    color: 0xeaf7ff,
-    transparent: true,
-    opacity: 0.18,
-    blending: THREE.AdditiveBlending,
-    depthWrite: false
-  })
-);
-scene.add(octagonGuide);
-
-function syncOctagonGuide() {
-  const apothem = 18.6;
-  const center = new THREE.Vector3(0, playfieldConfig.noteHitY - 0.02, 0);
-  const radius = apothem / Math.cos(Math.PI / 8);
-  const points = [];
-  for (let i = 0; i < 8; i += 1) {
-    const angle = -Math.PI / 2 + Math.PI / 8 + i * Math.PI / 4;
-    points.push(
-      center.x + Math.cos(angle) * radius,
-      center.y,
-      center.z + Math.sin(angle) * radius
-    );
-  }
-  octagonGuide.geometry.dispose();
-  octagonGuide.geometry = new THREE.BufferGeometry();
-  octagonGuide.geometry.setAttribute("position", new THREE.Float32BufferAttribute(points, 3));
-}
+const receiverWorldQuaternion = new THREE.Quaternion();
+const receiverBillboardQuaternion = new THREE.Quaternion();
 
 function makeEllipseTubeGeometry(radiusX, radiusY, tubeRadius) {
   const points = [];
@@ -1044,6 +1550,80 @@ const receiverRing = new THREE.Mesh(
 );
 receiverGroup.add(receiverRing);
 
+function makeSideRail(color) {
+  const positions = new Float32Array((sideTrajectoryPointCount - 1) * 2 * 3);
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+  geometry.setDrawRange(0, 0);
+  const rail = new THREE.LineSegments(
+    geometry,
+    new THREE.LineBasicMaterial({
+      color,
+      transparent: true,
+      opacity: 0.68,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false
+    })
+  );
+  rail.userData.baseOpacity = 0.68;
+  rail.userData.positions = positions;
+  rail.frustumCulled = false;
+  return rail;
+}
+
+const leftRail = makeSideRail(palette.left);
+const rightRail = makeSideRail(palette.right);
+scene.add(leftRail, rightRail);
+
+function writeSideTrajectoryGeometry(rail, worldPoints, pointCount) {
+  const positions = rail.userData.positions;
+  let offset = 0;
+  for (let i = 0; i < pointCount - 1; i += 1) {
+    positions[offset++] = worldPoints[i].x;
+    positions[offset++] = worldPoints[i].y;
+    positions[offset++] = worldPoints[i].z;
+    positions[offset++] = worldPoints[i + 1].x;
+    positions[offset++] = worldPoints[i + 1].y;
+    positions[offset++] = worldPoints[i + 1].z;
+  }
+  rail.geometry.setDrawRange(0, (pointCount - 1) * 2);
+  rail.geometry.getAttribute("position").needsUpdate = true;
+}
+
+function updateSideTrajectories(chartTime) {
+  const horizon = timingConfig.staticNoteLeadSeconds + 0.45;
+  const remainingChartTime = Math.max(0.001, timingConfig.chartDuration - chartTime);
+  const sampledHorizon = Math.min(horizon, remainingChartTime);
+  sideTrajectorySampleCount = Math.max(
+    2,
+    Math.min(
+      sideTrajectoryPointCount,
+      Math.ceil(sideTrajectoryPointCount * sampledHorizon / horizon)
+    )
+  );
+
+  for (let i = 0; i < sideTrajectorySampleCount; i += 1) {
+    const sampleTime = chartTime + sampledHorizon * i / Math.max(1, sideTrajectorySampleCount - 1);
+    const trajectoryTime = Math.min(sampleTime, timingConfig.chartDuration - 0.0001);
+    const pose = sampleReceiverPose(trajectoryTime);
+    pointFromReceiverPose(
+      pose,
+      -playfieldConfig.sideLaneX,
+      0,
+      leftTrajectoryWorldPoints[i]
+    );
+    pointFromReceiverPose(
+      pose,
+      playfieldConfig.sideLaneX,
+      0,
+      rightTrajectoryWorldPoints[i]
+    );
+  }
+
+  writeSideTrajectoryGeometry(leftRail, leftTrajectoryWorldPoints, sideTrajectorySampleCount);
+  writeSideTrajectoryGeometry(rightRail, rightTrajectoryWorldPoints, sideTrajectorySampleCount);
+}
+
 function syncPlayfieldVisuals() {
   receiverState.anchor.copy(receiverState.currentPosition);
   receiverGroup.position.copy(receiverState.anchor);
@@ -1057,13 +1637,15 @@ function syncPlayfieldVisuals() {
   receiverSquareParticles?.forEach((square) => {
     square.userData.radius = playfieldConfig.receiverRadius;
   });
-  syncOctagonGuide();
+  updateSideTrajectories(chartState.chartTime);
 }
 
 const landingHintGeo = new THREE.TorusGeometry(0.34, 0.018, 40, 6);
 landingHintGeo.rotateX(Math.PI / 2);
 function acquireLandingHint() {
   const hint = new THREE.Mesh(landingHintGeo, makeGlowMaterial(0xeaf7ff, 0.18));
+  hint.material.depthTest = false;
+  hint.renderOrder = 12;
   hint.visible = false;
   notesRoot.add(hint);
   landingHintPool.push(hint);
@@ -1109,6 +1691,7 @@ function setFreeCamera(enabled) {
 
 window.ParticleSoar = {
   loadChart,
+  sampleReceiverPose,
   cameraProfile,
   timingConfig,
   playfieldConfig,
@@ -1203,10 +1786,45 @@ function notePointAtHitTime(note, hitTime, chartTime, wrap = true) {
 }
 
 function notePosition(note, chartTime) {
+  if (chartState.motionMode === "receiver-catch") {
+    const timeToHit = timeUntilHit(note.hitTime, chartTime);
+    const p = 1 - timeToHit / timingConfig.staticNoteLeadSeconds;
+    return { position: note.hitPosition.clone(), progress: p, timeToHit };
+  }
   return notePointAtHitTime(note, note.hitTime, chartTime);
 }
 
+function buildHoldTrajectory(note) {
+  if (chartState.motionMode !== "receiver-catch" || note.endTime <= note.hitTime) return null;
+  return Object.freeze({
+    startTime: note.hitTime,
+    endTime: note.endTime
+  });
+}
+
 function holdSegment(note, chartTime) {
+  if (chartState.motionMode === "receiver-catch") {
+    const headTimeToHit = timeUntilHit(note.hitTime, chartTime, false);
+    const tailTimeToHit = timeUntilHit(note.endTime, chartTime, false);
+    const activeHead = headTimeToHit <= 0 && tailTimeToHit >= -timingConfig.postHitSeconds;
+    const headTransform = activeHead ? getLandingHintTransform(note) : null;
+    const tailTransform = tailTimeToHit <= 0 ? getLandingHintTransform(note) : null;
+    return {
+      head: {
+        position: headTransform ? headTransform.position : note.hitPosition.clone(),
+        progress: 1 - headTimeToHit / timingConfig.staticNoteLeadSeconds,
+        timeToHit: headTimeToHit
+      },
+      tail: {
+        position: tailTransform ? tailTransform.position : note.tailHitPosition.clone(),
+        progress: 1 - tailTimeToHit / timingConfig.staticNoteLeadSeconds,
+        timeToHit: tailTimeToHit
+      },
+      progress: 1 - headTimeToHit / timingConfig.staticNoteLeadSeconds,
+      timeToHit: headTimeToHit,
+      trajectoryStartTime: activeHead ? chartTime : note.hitTime
+    };
+  }
   const head = notePointAtHitTime(note, note.hitTime, chartTime, false);
   const tail = notePointAtHitTime(note, note.endTime, chartTime, false);
   if (head.progress > 1) {
@@ -1239,6 +1857,7 @@ function updateCameraDebug() {
   cameraPositionReadout.textContent = formatVector(camera.position);
   cameraTargetReadout.textContent = formatVector(controls.target);
   cameraFovReadout.textContent = camera.fov.toFixed(2);
+  backgroundCountReadout.textContent = `${particleGeo.drawRange.count} points / ${backgroundTriangleMesh.count} triangles`;
 }
 
 function setObjectOpacity(object, opacity) {
@@ -1292,33 +1911,58 @@ function updateHoldNoteVisual(note, segment, opacity, t) {
   const { head, bodyParticles } = note.mesh.userData;
   const start = segment.head.position;
   const end = segment.tail.position;
-  const delta = end.clone().sub(start);
-  const length = Math.max(0.001, delta.length());
-  const direction = delta.normalize();
+  const holdTrajectory = note.holdTrajectory;
+  const trajectoryStartTime = segment.trajectoryStartTime ?? holdTrajectory?.startTime ?? note.hitTime;
+  const trajectoryEndTime = holdTrajectory?.endTime ?? note.endTime;
+  const remainingTrajectoryTime = trajectoryEndTime - trajectoryStartTime;
+  holdRenderDelta.copy(end).sub(start);
+  const straightLength = Math.max(0.001, holdRenderDelta.length());
+  holdRenderDirection.copy(holdRenderDelta).normalize();
   const radius = 0.25 * note.mesh.userData.holdRadiusScale;
-  const axisA = note.zone.judgeLineDirection.clone().sub(direction.clone().multiplyScalar(note.zone.judgeLineDirection.dot(direction)));
-  if (axisA.lengthSq() < 0.000001) axisA.copy(note.zone.depthDirection);
-  axisA.normalize();
-  const axisB = new THREE.Vector3().crossVectors(direction, axisA).normalize();
+  let straightAxisA;
+  let straightAxisB;
+  if (!holdTrajectory) {
+    straightAxisA = holdRenderAxisA.copy(note.zone.judgeLineDirection)
+      .addScaledVector(
+        holdRenderDirection,
+        -note.zone.judgeLineDirection.dot(holdRenderDirection)
+      );
+    if (straightAxisA.lengthSq() < 0.000001) straightAxisA.copy(note.zone.depthDirection);
+    straightAxisA.normalize();
+    straightAxisB = holdRenderAxisB.crossVectors(holdRenderDirection, straightAxisA).normalize();
+  }
 
   note.mesh.position.set(0, 0, 0);
   note.mesh.quaternion.identity();
   head.position.copy(start);
 
   bodyParticles.forEach((particle, index) => {
-    if (opacity <= 0.02 || length <= 0.05) {
+    if (opacity <= 0.02 || (holdTrajectory ? remainingTrajectoryTime <= 0.002 : straightLength <= 0.05)) {
       particle.visible = false;
       return;
     }
-    const u = (particle.userData.along + 0.017 * Math.sin(index * 3.19)) % 1;
+    const u = ((particle.userData.along + 0.017 * Math.sin(index * 3.19)) % 1 + 1) % 1;
     const radial = particle.userData.radial * radius;
     const angle = particle.userData.angle + t * particle.userData.orbitSpeed;
     const edgeFade = smoothstep(0.0, 0.08, u) * (1 - smoothstep(0.92, 1.0, u));
     const localOpacity = opacity * particle.userData.baseOpacity * edgeFade;
-    const position = start.clone()
-      .lerp(end, u)
-      .add(axisA.clone().multiplyScalar(Math.cos(angle) * radial))
-      .add(axisB.clone().multiplyScalar(Math.sin(angle) * radial));
+    const position = holdRenderPosition;
+    let axisA;
+    let axisB;
+    if (holdTrajectory) {
+      const pathTime = THREE.MathUtils.lerp(trajectoryStartTime, trajectoryEndTime, u);
+      const pose = chartState.receiverTrajectory.sample(pathTime);
+      pointFromReceiverPose(pose, note.localX, note.depthOffset, position);
+      axisA = holdRenderAxisA.set(1, 0, 0).applyQuaternion(pose.quaternion).normalize();
+      axisB = holdRenderAxisB.set(0, 0, 1).applyQuaternion(pose.quaternion).normalize();
+    } else {
+      axisA = straightAxisA;
+      axisB = straightAxisB;
+      position.copy(start).lerp(end, u);
+    }
+    position
+      .addScaledVector(axisA, Math.cos(angle) * radial)
+      .addScaledVector(axisB, Math.sin(angle) * radial);
 
     particle.position.copy(position);
     particle.quaternion.copy(camera.quaternion);
@@ -1358,17 +2002,17 @@ function updateNotes(t, chartTime) {
 
     const { position, progress, timeToHit } = notePosition(note, chartTime);
     note.mesh.position.copy(position);
-    if (!isCentralNote(note)) note.mesh.quaternion.copy(note.zone.noteQuaternion);
-    const isCentral = isCentralNote(note);
-    const pulseScale = isCentral ? Math.sin(t * 5 + note.pulse) * 0.035 : 0;
+    if (!isPlayableNote(note)) note.mesh.quaternion.copy(note.zone.noteQuaternion);
+    const isPlayable = isPlayableNote(note);
+    const pulseScale = isPlayable ? Math.sin(t * 5 + note.pulse) * 0.035 : 0;
     const scale = note.mesh.userData.baseScale * (1 + pulseScale);
     const visibility = noteVisibility(progress);
-    const hitFlash = isCentral ? (note.mesh.userData.hitFlash ?? 0) : 0;
+    const hitFlash = isPlayable ? (note.mesh.userData.hitFlash ?? 0) : 0;
     const opacity = note.mesh.userData.baseOpacity * visibility * (1 + hitFlash * 0.45);
 
     updateSphereNoteVisual(note.mesh, opacity, scale, hitFlash);
     if (isSpaceNote(note)) updateSpaceSatellites(note, t, opacity);
-    note.mesh.userData.hitFlash = isCentral ? Math.max(0, hitFlash - 0.08) : 0;
+    note.mesh.userData.hitFlash = isPlayable ? Math.max(0, hitFlash - 0.08) : 0;
     visibleNotes.push({
       note,
       progress,
@@ -1388,19 +2032,28 @@ function updateLandingHints(visibleNotes) {
   });
 
   let hintIndex = 0;
+  const hintWindow = 1;
+  const baseOpacity = chartState.motionMode === "receiver-catch" ? 0.28 : 0.08;
+  const hitOpacity = chartState.motionMode === "receiver-catch" ? 0.28 : 0.22;
+  const baseScale = chartState.motionMode === "receiver-catch" ? 1.0 : 0.75;
+  const hitScale = chartState.motionMode === "receiver-catch" ? 0.42 : 0.65;
   visibleNotes.forEach((item) => {
-    if (!isCentralNote(item.note)) return;
+    if (!isPlayableNote(item.note)) return;
     if (item.opacity <= 0.025) return;
     const timeToHit = item.timeToHit;
-    if (timeToHit < 0 || timeToHit > 1 || hintIndex >= landingHintPool.length) return;
+    if (timeToHit < -0.04 || timeToHit > hintWindow || hintIndex >= landingHintPool.length) return;
 
-    const targetInfo = getTargetForNote(item.note);
-    const nearHit = smoothstep(0.0, 1.0, 1 - timeToHit);
+    const targetInfo = getLandingHintTransform(item.note);
+    const normalizedLead = THREE.MathUtils.clamp(1 - timeToHit / hintWindow, 0, 1);
+    const nearHit = smoothstep(0.0, 1.0, normalizedLead);
     const hint = landingHintPool[hintIndex];
     hint.position.copy(targetInfo.position);
-    hint.quaternion.copy(item.note.zone.receiverQuaternion);
-    hint.scale.setScalar(0.75 + nearHit * 0.65);
-    hint.material.opacity = item.opacity * (0.08 + nearHit * 0.22);
+    hint.quaternion.copy(targetInfo.quaternion);
+    hint.scale.setScalar(baseScale + nearHit * hitScale);
+    const hintOpacity = chartState.motionMode === "receiver-catch"
+      ? baseOpacity + nearHit * hitOpacity
+      : item.opacity * (baseOpacity + nearHit * hitOpacity);
+    hint.material.opacity = hintOpacity;
     hint.visible = true;
     hintIndex += 1;
   });
@@ -1447,40 +2100,107 @@ function writeConnectionGeometry(line, a, b, color, opacityScale) {
   return true;
 }
 
-function updateMultiHitLines(visibleNotes) {
+function noteColor(note) {
+  if (note.type === "left") return palette.left;
+  if (note.type === "right") return palette.right;
+  if (isSpaceNote(note)) return palette.space;
+  if (isTopNote(note)) return palette.top;
+  return palette.white;
+}
+
+function connectionColor(a, b) {
+  return noteColor(a.note).clone().lerp(noteColor(b.note), 0.5);
+}
+
+function updateNoteConnectionLines(visibleNotes) {
   linePool.forEach((line) => {
     line.visible = false;
   });
 
   let lineIndex = 0;
-  const groups = new Map();
-  visibleNotes.forEach((item) => {
-    if (!isCentralNote(item.note)) return;
-    if (!groups.has(item.note.hitGroup)) groups.set(item.note.hitGroup, []);
-    groups.get(item.note.hitGroup).push(item);
+  const connect = (a, b, opacityScale, color = connectionColor(a, b)) => {
+    if (lineIndex >= linePool.length) return;
+    if (writeConnectionGeometry(linePool[lineIndex], a, b, color, opacityScale)) {
+      lineIndex += 1;
+    }
+  };
+
+  const visibleItems = visibleNotes.filter((item) => item.opacity > 0.02);
+  const middleNotesByTime = new Map();
+  visibleItems.forEach((item) => {
+    if (!isMiddleNote(item.note)) return;
+    if (!middleNotesByTime.has(item.note.hitTime)) middleNotesByTime.set(item.note.hitTime, []);
+    middleNotesByTime.get(item.note.hitTime).push(item);
   });
 
-  for (const group of groups.values()) {
-    const sortedGroup = group
-      .filter((item) => item.opacity > 0.02)
-      .sort((a, b) => (a.wPos ?? 0) - (b.wPos ?? 0));
-    for (let i = 0; i < sortedGroup.length - 1; i += 1) {
-      const a = sortedGroup[i];
-      const b = sortedGroup[i + 1];
-      if (lineIndex >= linePool.length || a.opacity <= 0.02 || b.opacity <= 0.02) continue;
-      if (writeConnectionGeometry(linePool[lineIndex], a, b, palette.white, 0.34)) lineIndex += 1;
+  const constellationLayers = [...middleNotesByTime.entries()]
+    .sort(([timeA], [timeB]) => timeA - timeB)
+    .map(([, simultaneousNotes]) => {
+      simultaneousNotes.sort((a, b) => (a.wPos ?? 0) - (b.wPos ?? 0));
+      return simultaneousNotes.length === 1
+        ? [simultaneousNotes[0]]
+        : [simultaneousNotes[0], simultaneousNotes[simultaneousNotes.length - 1]];
+    });
+
+  const connectConstellationNodes = (a, b) => {
+    connect(a, b, renderConfig.constellationLineOpacity, palette.white);
+  };
+  for (let i = 0; i < constellationLayers.length - 1; i += 1) {
+    const currentLayer = constellationLayers[i];
+    const nextLayer = constellationLayers[i + 1];
+    if (currentLayer.length === 2 && nextLayer.length === 2) {
+      connectConstellationNodes(currentLayer[0], nextLayer[0]);
+      connectConstellationNodes(currentLayer[1], nextLayer[1]);
+    } else {
+      currentLayer.forEach((currentNode) => {
+        nextLayer.forEach((nextNode) => connectConstellationNodes(currentNode, nextNode));
+      });
     }
+  }
+
+  const hitGroups = new Map();
+  visibleItems.forEach((item) => {
+    const key = `${item.note.hitGroup}:${item.note.hitTime}`;
+    if (!hitGroups.has(key)) hitGroups.set(key, []);
+    hitGroups.get(key).push(item);
+  });
+
+  for (const group of hitGroups.values()) {
+    const middleNotes = group
+      .filter((item) => isMiddleNote(item.note))
+      .sort((a, b) => (a.wPos ?? 0) - (b.wPos ?? 0));
+    if (middleNotes.length === 0) continue;
+
+    const leftmostMiddle = middleNotes[0];
+    const rightmostMiddle = middleNotes[middleNotes.length - 1];
+    const middleEdges = middleNotes.length === 1
+      ? [leftmostMiddle]
+      : [leftmostMiddle, rightmostMiddle];
+
+    group.filter((item) => isSpecialChordNote(item.note)).forEach((specialNote) => {
+      middleEdges.forEach((edgeNote) => {
+        connect(specialNote, edgeNote, renderConfig.multiHitLineOpacity);
+      });
+    });
+    group.filter((item) => item.note.type === "left").forEach((leftNote) => {
+      connect(leftNote, leftmostMiddle, renderConfig.multiHitLineOpacity);
+    });
+    group.filter((item) => item.note.type === "right").forEach((rightNote) => {
+      connect(rightNote, rightmostMiddle, renderConfig.multiHitLineOpacity);
+    });
   }
 }
 
 function updateReceiver(t, beat) {
   receiverRing.scale.setScalar(1 + beat * 0.018);
+  const railPulse = 0.50 + 0.50 * (0.5 + 0.5 * Math.sin(t * 2.35));
+  leftRail.material.opacity = leftRail.userData.baseOpacity * railPulse;
+  rightRail.material.opacity = rightRail.userData.baseOpacity * railPulse;
   receiverGroup.position.copy(receiverState.anchor);
   receiverGroup.quaternion.copy(receiverState.currentQuaternion);
   receiverGroup.updateMatrixWorld(true);
-  const receiverWorldQuaternion = new THREE.Quaternion();
   receiverGroup.getWorldQuaternion(receiverWorldQuaternion);
-  const billboardQuaternion = receiverWorldQuaternion.invert().multiply(camera.quaternion);
+  receiverBillboardQuaternion.copy(receiverWorldQuaternion).invert().multiply(camera.quaternion);
   receiverSquareParticles.forEach((square, index) => {
     const phase = (square.userData.ySeed + t * square.userData.speed) % 1;
     const rise = phase * 2.45;
@@ -1498,7 +2218,7 @@ function updateReceiver(t, beat) {
       0.2 + rise,
       radialZ * radial + tangentZ * tangent
     );
-    square.quaternion.copy(billboardQuaternion);
+    square.quaternion.copy(receiverBillboardQuaternion);
     square.rotateZ(t * (0.18 + (index % 4) * 0.07) + index);
     square.material.opacity = square.userData.baseOpacity
       * (1 - smoothstep(0.66, 1.0, phase))
@@ -1507,15 +2227,9 @@ function updateReceiver(t, beat) {
 }
 
 function updateReceiverAnchor() {
-  const state = receiverStateAt(chartState.chartTime);
-  receiverState.currentZone = state.zone;
-  receiverState.targetZone = state.targetZone;
+  const state = sampleReceiverPose(chartState.chartTime);
   receiverState.currentPosition.copy(state.position);
-  receiverState.targetPosition.copy(state.targetZone.receiverPosition);
   receiverState.currentQuaternion.copy(state.quaternion);
-  receiverState.targetQuaternion.copy(state.targetZone.receiverQuaternion);
-  receiverState.moving = state.moving;
-  receiverState.progress = state.progress;
   receiverState.anchor.copy(receiverState.currentPosition);
 }
 
@@ -1526,10 +2240,10 @@ function animate() {
 
   chartState.chartTime = ((t - chartState.startTime) % timingConfig.chartDuration + timingConfig.chartDuration) % timingConfig.chartDuration;
   updateReceiverAnchor();
-  particlesRoot.rotation.y = -t * 0.035;
+  updateSideTrajectories(chartState.chartTime);
   const visibleNotes = updateNotes(t, chartState.chartTime);
   updateLandingHints(visibleNotes);
-  updateMultiHitLines(visibleNotes);
+  updateNoteConnectionLines(visibleNotes);
 
   if (debugFreeCamera) {
     controls.update();
@@ -1540,6 +2254,7 @@ function animate() {
   }
   updateCameraDebug();
   updateReceiver(t, beat);
+  updateBackgroundParticles(t);
 
   composer.render();
   requestAnimationFrame(animate);
@@ -1654,7 +2369,7 @@ body {
   left: 28px;
   bottom: 24px;
   display: grid;
-  grid-template-columns: auto auto auto auto auto auto auto auto;
+  grid-template-columns: repeat(10, auto);
   align-items: center;
   gap: 8px;
   color: rgba(234, 247, 255, 0.68);
@@ -1677,6 +2392,11 @@ body {
 .dot.space {
   color: #ffd66b;
   background: #ffd66b;
+}
+
+.dot.top {
+  color: #9af2c5;
+  background: #9af2c5;
 }
 
 .dot.left {
