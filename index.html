@@ -11,8 +11,12 @@
     <div class="meters">
       <div><span>camera</span><strong id="camera-mode">free</strong></div>
       <div><span>notes</span><strong>mock</strong></div>
-      <div><span>logic</span><strong>off</strong></div>
+      <div><span>logic</span><strong id="logic-state">on</strong></div>
     </div>
+  </div>
+  <div class="combo-display" aria-live="polite">
+    <span>COMBO</span>
+    <strong id="combo-count">0</strong>
   </div>
   <div class="legend" aria-hidden="true">
     <span class="dot middle"></span><span>middle</span>
@@ -51,6 +55,8 @@ const cameraPositionReadout = document.getElementById("camera-position");
 const cameraTargetReadout = document.getElementById("camera-target");
 const cameraFovReadout = document.getElementById("camera-fov");
 const backgroundCountReadout = document.getElementById("background-count");
+const logicStateReadout = document.getElementById("logic-state");
+const comboCountReadout = document.getElementById("combo-count");
 const renderer = new THREE.WebGLRenderer({
   canvas,
   antialias: true,
@@ -628,6 +634,7 @@ const timingConfig = {
   flowSpeed: 11.75,
   staticNoteLeadSeconds: 2.15,
   postHitSeconds: 0.38,
+  postHitFadeSeconds: 0.32,
   receiverMoveSeconds: 0.28
 };
 
@@ -643,10 +650,34 @@ const playfieldConfig = {
 const renderConfig = {
   pooledConnections: 72,
   pooledLandingHints: 72,
+  pooledHitParticles: 192,
+  hitParticlesPerBurst: 10,
   receiverParticles: 46,
   multiHitLineWidth: 0.0315,
   constellationLineOpacity: 0.12,
   multiHitLineOpacity: 0.34
+};
+
+const judgementConfig = {
+  mode: "ordinary",
+  inputOffsetSeconds: 0,
+  windows: {
+    ordinary: { flawless: 0.040, prime: 0.075, decent: 0.150, loose: 0.170 },
+    challenging: { flawless: 0.025, prime: 0.040, decent: 0.080, loose: 0.100 },
+    impossible: { flawless: 0.013, prime: 0.020, decent: 0.040, loose: 0.050 }
+  }
+};
+
+const gameplayState = {
+  activeHolds: new Set(),
+  holdsByKeyCode: new Map(),
+  noteQueues: new Map(),
+  judgementHistory: [],
+  counts: { flawless: 0, prime: 0, decent: 0, loose: 0, hollow: 0 },
+  combo: 0,
+  maxCombo: 0,
+  lastChartTime: 0,
+  feedbackUntil: 0
 };
 
 const chartState = {
@@ -655,7 +686,8 @@ const chartState = {
   motionMode: "notes-fall",
   flowSpeedTimeline: null,
   cameraTimelines: {},
-  receiverTrajectory: null
+  receiverTrajectory: null,
+  constellationEdges: []
 };
 
 const receiverState = {
@@ -1245,6 +1277,15 @@ function isSideNote(noteOrType) {
   return type === "left" || type === "right";
 }
 
+function noteColor(noteOrType) {
+  const type = typeof noteOrType === "string" ? noteOrType : noteOrType.type;
+  if (type === "left") return palette.left;
+  if (type === "right") return palette.right;
+  if (isSpaceNote(type)) return palette.space;
+  if (isTopNote(type)) return palette.top;
+  return palette.white;
+}
+
 function holdKind(type) {
   return type === "spaceHold" ? "space" : "middle";
 }
@@ -1334,6 +1375,14 @@ function spawnNote(rawNote, index = 0) {
       : isTopNote(type)
         ? createTopNoteMesh()
         : createSideNoteMesh(type);
+  mesh.traverse((object) => {
+    const materials = Array.isArray(object.material) ? object.material : [object.material];
+    materials.forEach((material) => {
+      if (material?.color && !material.userData.judgementBaseColor) {
+        material.userData.judgementBaseColor = material.color.clone();
+      }
+    });
+  });
   if (!isCentralNote(type)) mesh.quaternion.copy(zone.noteQuaternion);
   const note = {
     mesh,
@@ -1351,7 +1400,13 @@ function spawnNote(rawNote, index = 0) {
     hitGroup: rawNote.hitGroup ?? rawNote.group ?? `note-${index}`,
     pulse: Math.random() * 10,
     judged: false,
-    hit: false
+    hit: false,
+    judgementStatus: "pending",
+    judgement: null,
+    earlyLoose: false,
+    capturedAtChartTime: null,
+    holdKeyCodes: new Set(),
+    emptySinceChartTime: null
   };
   if (isHoldNote(note)) note.holdTrajectory = buildHoldTrajectory(note);
   notes.push(note);
@@ -1365,6 +1420,42 @@ function clearNotes() {
     });
   });
   notes.length = 0;
+  chartState.constellationEdges = [];
+}
+
+function buildConstellationEdges(chartNotes) {
+  const notesByTime = new Map();
+  chartNotes.forEach((note) => {
+    if (!isMiddleNote(note)) return;
+    if (!notesByTime.has(note.hitTime)) notesByTime.set(note.hitTime, []);
+    notesByTime.get(note.hitTime).push(note);
+  });
+
+  const layers = [...notesByTime.entries()]
+    .sort(([timeA], [timeB]) => timeA - timeB)
+    .map(([, simultaneousNotes]) => {
+      simultaneousNotes.sort((a, b) => (a.wPos ?? 0) - (b.wPos ?? 0));
+      return simultaneousNotes.length === 1
+        ? [simultaneousNotes[0]]
+        : [simultaneousNotes[0], simultaneousNotes[simultaneousNotes.length - 1]];
+    });
+
+  const edges = [];
+  for (let i = 0; i < layers.length - 1; i += 1) {
+    const currentLayer = layers[i];
+    const nextLayer = layers[i + 1];
+    if (currentLayer.length === 2 && nextLayer.length === 2) {
+      edges.push(
+        { from: currentLayer[0], to: nextLayer[0] },
+        { from: currentLayer[1], to: nextLayer[1] }
+      );
+    } else {
+      currentLayer.forEach((from) => {
+        nextLayer.forEach((to) => edges.push({ from, to }));
+      });
+    }
+  }
+  return Object.freeze(edges.map((edge) => Object.freeze(edge)));
 }
 
 function toVector3(value, fallback) {
@@ -1432,6 +1523,8 @@ function loadChart(chart) {
   syncPlayfieldVisuals();
   clearNotes();
   removeDuplicateSpecialNotes(chart.notes).forEach((note, index) => spawnNote(note, index));
+  chartState.constellationEdges = buildConstellationEdges(notes);
+  resetGameplayState();
   rebuildBackgroundField();
 }
 
@@ -1440,7 +1533,7 @@ function createDemoChart() {
   const duration = 11.2;
   const chartNotes = [];
   const receiverMotion = {
-    values: [0, 1.0, 10],
+    values: [0, 1.0, 20],
     azimuthVelocity: 0.42,
     sampleSeconds: 0.04,
     origin: [0, playfieldConfig.noteHitY, 0]
@@ -1654,6 +1747,91 @@ function acquireLandingHint() {
 
 for (let i = 0; i < renderConfig.pooledLandingHints; i += 1) acquireLandingHint();
 
+const hitParticleGeometry = new THREE.PlaneGeometry(1, 1);
+let nextHitParticleIndex = 0;
+const hitEffectParticles = Array.from({ length: renderConfig.pooledHitParticles }, () => {
+  const particle = new THREE.Mesh(
+    hitParticleGeometry,
+    makeHotGlowMaterial(palette.white, 0, 2.2)
+  );
+  particle.material.depthTest = false;
+  particle.renderOrder = 16;
+  particle.visible = false;
+  particle.userData = {
+    active: false,
+    spawnedAt: 0,
+    duration: 0,
+    baseScale: 0,
+    baseOpacity: 0,
+    origin: new THREE.Vector3(),
+    velocity: new THREE.Vector3(),
+    spin: 0,
+    rotation: 0
+  };
+  notesRoot.add(particle);
+  return particle;
+});
+
+function resetHitEffects() {
+  hitEffectParticles.forEach((particle) => {
+    particle.userData.active = false;
+    particle.visible = false;
+  });
+}
+
+function spawnHitEffect(note) {
+  const color = noteColor(note);
+  const origin = note.hitPosition;
+  const axisA = note.zone.judgeLineDirection;
+  const axisB = note.zone.depthDirection;
+  const fallAxis = note.zone.fallDirection;
+  const spawnedAt = clock.getElapsedTime();
+
+  for (let i = 0; i < renderConfig.hitParticlesPerBurst; i += 1) {
+    const particle = hitEffectParticles[nextHitParticleIndex];
+    nextHitParticleIndex = (nextHitParticleIndex + 1) % hitEffectParticles.length;
+    const angle = (i / renderConfig.hitParticlesPerBurst) * Math.PI * 2 + (Math.random() - 0.5) * 0.34;
+    const speed = 2.8 + Math.random() * 3.4;
+    const data = particle.userData;
+    data.active = true;
+    data.spawnedAt = spawnedAt;
+    data.duration = 0.42 + Math.random() * 0.22;
+    data.baseScale = 0.15 + Math.random() * 0.2;
+    data.baseOpacity = 0.68 + Math.random() * 0.3;
+    data.origin.copy(origin);
+    data.velocity
+      .copy(axisA).multiplyScalar(Math.cos(angle) * speed)
+      .addScaledVector(axisB, Math.sin(angle) * speed)
+      .addScaledVector(fallAxis, (Math.random() - 0.5) * 0.65);
+    data.spin = (Math.random() < 0.5 ? -1 : 1) * (2.5 + Math.random() * 4.5);
+    data.rotation = Math.random() * Math.PI * 2;
+    particle.material.color.copy(color).multiplyScalar(2.2);
+    particle.material.opacity = data.baseOpacity;
+    particle.position.copy(origin);
+    particle.visible = true;
+  }
+}
+
+function updateHitEffects(t) {
+  hitEffectParticles.forEach((particle) => {
+    const data = particle.userData;
+    if (!data.active) return;
+    const age = t - data.spawnedAt;
+    const progress = age / data.duration;
+    if (progress >= 1) {
+      data.active = false;
+      particle.visible = false;
+      return;
+    }
+    const travel = age * (1 - progress * 0.28);
+    particle.position.copy(data.origin).addScaledVector(data.velocity, travel);
+    particle.quaternion.copy(camera.quaternion);
+    particle.rotateZ(data.rotation + age * data.spin);
+    particle.scale.setScalar(data.baseScale * (1 + progress * 0.45));
+    particle.material.opacity = data.baseOpacity * Math.pow(1 - progress, 1.7);
+  });
+}
+
 const receiverSquareParticles = Array.from({ length: renderConfig.receiverParticles }, (_, index) => {
   const size = 0.14 + (index % 4) * 0.045;
   const square = new THREE.Mesh(
@@ -1695,7 +1873,11 @@ window.ParticleSoar = {
   cameraProfile,
   timingConfig,
   playfieldConfig,
-  setFreeCamera
+  judgementConfig,
+  gameplayState,
+  setFreeCamera,
+  getLiveChartTime,
+  resetGameplayState
 };
 
 const leftKeyCodes = new Set([
@@ -1713,32 +1895,376 @@ const rightKeyCodes = new Set([
   "Minus", "Equal", "Backspace"
 ]);
 
-function judgeSideInput(direction) {
-  const windowSeconds = 0.16;
-  let best = null;
-  let bestDelta = Infinity;
+const middleKeyCodes = new Set([
+  "Digit4", "Digit5", "Digit6", "Digit7", "Digit8", "Digit9", "Digit0",
+  "KeyR", "KeyT", "KeyY", "KeyU", "KeyI", "KeyO",
+  "KeyD", "KeyF", "KeyG", "KeyH", "KeyJ", "KeyK", "KeyL",
+  "KeyC", "KeyV", "KeyB", "KeyN", "KeyM", "Comma"
+]);
+
+const topKeyCodes = new Set([
+  "Digit4", "Digit5", "Digit6", "Digit7", "Digit8", "Digit9", "Digit0",
+  "KeyR", "KeyT", "KeyY", "KeyU", "KeyI", "KeyO"
+]);
+
+const gameplayKeyCodes = new Set([
+  ...leftKeyCodes,
+  ...rightKeyCodes,
+  ...middleKeyCodes,
+  ...topKeyCodes,
+  "Space"
+]);
+
+const judgementOrder = ["flawless", "prime", "decent", "loose"];
+
+function normalizeChartTime(chartTime) {
+  const duration = timingConfig.chartDuration;
+  return ((chartTime % duration) + duration) % duration;
+}
+
+function getLiveChartTime() {
+  return normalizeChartTime(clock.getElapsedTime() - chartState.startTime);
+}
+
+function getJudgeChartTime() {
+  return normalizeChartTime(getLiveChartTime() + judgementConfig.inputOffsetSeconds);
+}
+
+function currentJudgementWindows() {
+  return judgementConfig.windows[judgementConfig.mode] ?? judgementConfig.windows.ordinary;
+}
+
+function judgementForGap(timeGap) {
+  const gap = Math.abs(timeGap);
+  const windows = currentJudgementWindows();
+  for (const judgement of judgementOrder) {
+    if (gap <= windows[judgement]) return judgement;
+  }
+  return "hollow";
+}
+
+function inputTypeForNote(note) {
+  if (isTopNote(note)) return "top";
+  if (isSpaceNote(note)) return "space";
+  if (note.type === "left" || note.type === "right") return note.type;
+  if (isMiddleNote(note)) return "middle";
+  return null;
+}
+
+function noteVisualHead(note) {
+  return isHoldNote(note) ? note.mesh.userData.head : note.mesh;
+}
+
+function flashJudgedNote(note) {
+  const head = noteVisualHead(note);
+  if (head) head.userData.hitFlash = 1;
+}
+
+function forEachNoteVisualMaterial(note, callback) {
+  noteVisualHead(note)?.traverse((object) => {
+    const materials = Array.isArray(object.material) ? object.material : [object.material];
+    materials.forEach((material) => {
+      if (material?.color) callback(material);
+    });
+  });
+}
+
+function restoreNoteVisualColor(note) {
+  forEachNoteVisualMaterial(note, (material) => {
+    const baseColor = material.userData.judgementBaseColor;
+    if (baseColor) material.color.copy(baseColor);
+  });
+}
+
+function applyEarlyLooseVisual(note, judgement, judgeChartTime) {
+  const offsetSeconds = note.headOffsetSeconds ?? judgeChartTime - note.hitTime;
+  if (judgement !== "loose" || offsetSeconds >= 0 || note.earlyLoose) return;
+  note.earlyLoose = true;
+  note.capturedAtChartTime = judgeChartTime;
+  forEachNoteVisualMaterial(note, (material) => material.color.setRGB(1, 0, 0));
+}
+
+function showJudgementFeedback(judgement) {
+  gameplayState.feedbackUntil = clock.getElapsedTime() + 0.65;
+  logicStateReadout.textContent = judgement.toUpperCase();
+}
+
+function clearHoldBindings(note) {
+  note.holdKeyCodes.forEach((code) => {
+    const boundHolds = gameplayState.holdsByKeyCode.get(code);
+    if (!boundHolds) return;
+    boundHolds.delete(note);
+    if (boundHolds.size === 0) gameplayState.holdsByKeyCode.delete(code);
+  });
+  note.holdKeyCodes.clear();
+  note.emptySinceChartTime = null;
+}
+
+function finalizeNote(note, judgement, judgeChartTime) {
+  if (note.judgementStatus === "judged") return;
+  if (isHoldNote(note)) {
+    gameplayState.activeHolds.delete(note);
+    clearHoldBindings(note);
+  }
+
+  note.judgementStatus = "judged";
+  note.judgement = judgement;
+  note.judged = true;
+  note.hit = judgement === "flawless" || judgement === "prime" || judgement === "decent";
+  applyEarlyLooseVisual(note, judgement, judgeChartTime);
+  const captured = judgement !== "hollow";
+  if (captured) {
+    flashJudgedNote(note);
+    if (!isHoldNote(note)) {
+      note.capturedAtChartTime = judgeChartTime;
+      if (judgement !== "loose") spawnHitEffect(note);
+    }
+  }
+  showJudgementFeedback(judgement);
+
+  gameplayState.counts[judgement] += 1;
+  if (note.hit) {
+    gameplayState.combo += 1;
+    gameplayState.maxCombo = Math.max(gameplayState.maxCombo, gameplayState.combo);
+  } else {
+    gameplayState.combo = 0;
+  }
+  comboCountReadout.textContent = String(gameplayState.combo);
+  gameplayState.judgementHistory.push({
+    note,
+    judgement,
+    judgedAt: judgeChartTime,
+    offsetSeconds: note.headOffsetSeconds ?? judgeChartTime - note.hitTime
+  });
+}
+
+function bindKeyToHold(note, code) {
+  note.holdKeyCodes.add(code);
+  note.emptySinceChartTime = null;
+  if (!gameplayState.holdsByKeyCode.has(code)) gameplayState.holdsByKeyCode.set(code, new Set());
+  gameplayState.holdsByKeyCode.get(code).add(note);
+}
+
+function beginHold(note, judgement, judgeChartTime, code) {
+  note.judgementStatus = "holding";
+  note.judgement = judgement;
+  note.judged = true;
+  note.hit = true;
+  note.headOffsetSeconds = judgeChartTime - note.hitTime;
+  applyEarlyLooseVisual(note, judgement, judgeChartTime);
+  gameplayState.activeHolds.add(note);
+  bindKeyToHold(note, code);
+  flashJudgedNote(note);
+  if (judgement !== "loose") spawnHitEffect(note);
+  showJudgementFeedback(judgement);
+}
+
+function rebuildJudgementQueues() {
+  gameplayState.noteQueues.clear();
   notes.forEach((note) => {
-    if (note.type !== direction || note.judged) return;
-    const delta = Math.abs(timeUntilHit(note.hitTime, chartState.chartTime));
-    if (delta < bestDelta) {
-      best = note;
-      bestDelta = delta;
+    const inputType = inputTypeForNote(note);
+    if (!inputType) return;
+    if (!gameplayState.noteQueues.has(inputType)) {
+      gameplayState.noteQueues.set(inputType, { notes: [], cursor: 0 });
+    }
+    gameplayState.noteQueues.get(inputType).notes.push(note);
+  });
+  gameplayState.noteQueues.forEach((queue) => {
+    queue.notes.sort((a, b) => a.hitTime - b.hitTime || (a.wPos ?? 0) - (b.wPos ?? 0));
+  });
+}
+
+function advanceJudgementCursor(queue) {
+  while (
+    queue.cursor < queue.notes.length
+    && queue.notes[queue.cursor].judgementStatus !== "pending"
+  ) {
+    queue.cursor += 1;
+  }
+}
+
+function resetGameplayState() {
+  gameplayState.activeHolds.clear();
+  gameplayState.holdsByKeyCode.clear();
+  gameplayState.judgementHistory.length = 0;
+  Object.keys(gameplayState.counts).forEach((key) => {
+    gameplayState.counts[key] = 0;
+  });
+  gameplayState.combo = 0;
+  gameplayState.maxCombo = 0;
+  gameplayState.lastChartTime = 0;
+  gameplayState.feedbackUntil = 0;
+  comboCountReadout.textContent = "0";
+  resetHitEffects();
+  notes.forEach((note) => {
+    note.judged = false;
+    note.hit = false;
+    note.judgementStatus = "pending";
+    note.judgement = null;
+    note.earlyLoose = false;
+    note.capturedAtChartTime = null;
+    note.headOffsetSeconds = null;
+    note.holdKeyCodes.clear();
+    note.emptySinceChartTime = null;
+    const head = noteVisualHead(note);
+    if (head) head.userData.hitFlash = 0;
+    restoreNoteVisualColor(note);
+  });
+  rebuildJudgementQueues();
+  logicStateReadout.textContent = "on";
+}
+
+function attachKeyToActiveHolds(inputType, code, judgeChartTime) {
+  const decentWindow = currentJudgementWindows().decent;
+  gameplayState.activeHolds.forEach((hold) => {
+    if (hold.judgementStatus !== "holding" || inputTypeForNote(hold) !== inputType) return;
+    if (Math.abs(hold.hitTime - judgeChartTime) > decentWindow) return;
+    bindKeyToHold(hold, code);
+  });
+}
+
+function tryJudgeInputType(inputType, code, judgeChartTime) {
+  const queue = gameplayState.noteQueues.get(inputType);
+  if (!queue) return false;
+  advanceJudgementCursor(queue);
+  if (queue.cursor >= queue.notes.length) return false;
+
+  let candidate = queue.notes[queue.cursor];
+  let judgement = judgementForGap(candidate.hitTime - judgeChartTime);
+  if (candidate.hitTime > judgeChartTime && judgement === "hollow") return false;
+
+  if (candidate.hitTime < judgeChartTime && judgement === "decent") {
+    for (let i = queue.cursor + 1; i < queue.notes.length; i += 1) {
+      const nextCandidate = queue.notes[i];
+      if (nextCandidate.judgementStatus !== "pending") continue;
+      if (nextCandidate.hitTime >= judgeChartTime) break;
+      const nextJudgement = judgementForGap(nextCandidate.hitTime - judgeChartTime);
+      if (nextJudgement === "flawless" || nextJudgement === "prime") {
+        candidate = nextCandidate;
+        judgement = nextJudgement;
+        break;
+      }
+    }
+  }
+
+  if (judgement === "hollow") return false;
+  if (isHoldNote(candidate)) {
+    beginHold(candidate, judgement, judgeChartTime, code);
+  } else {
+    finalizeNote(candidate, judgement, judgeChartTime);
+  }
+  return true;
+}
+
+function inputTypesForCode(code) {
+  if (code === "Space") return ["space"];
+  if (leftKeyCodes.has(code)) return ["left"];
+  if (rightKeyCodes.has(code)) return ["right"];
+  if (topKeyCodes.has(code)) return ["top", "middle"];
+  if (middleKeyCodes.has(code)) return ["middle"];
+  return [];
+}
+
+function releaseGameplayKey(code, judgeChartTime) {
+  const boundHolds = gameplayState.holdsByKeyCode.get(code);
+  if (!boundHolds) return;
+  [...boundHolds].forEach((hold) => {
+    hold.holdKeyCodes.delete(code);
+    if (hold.holdKeyCodes.size === 0) hold.emptySinceChartTime = judgeChartTime;
+  });
+  gameplayState.holdsByKeyCode.delete(code);
+}
+
+function releaseAllGameplayKeys(judgeChartTime) {
+  [...gameplayState.holdsByKeyCode.keys()].forEach((code) => {
+    releaseGameplayKey(code, judgeChartTime);
+  });
+}
+
+function updateActiveHolds(chartTime) {
+  const windows = currentJudgementWindows();
+  [...gameplayState.activeHolds].forEach((hold) => {
+    if (hold.judgementStatus === "holding") {
+      if (hold.endTime <= chartTime + windows.prime) {
+        hold.judgementStatus = "completed";
+        clearHoldBindings(hold);
+      } else if (hold.holdKeyCodes.size === 0 && hold.emptySinceChartTime !== null) {
+        if (hold.endTime <= hold.emptySinceChartTime + windows.decent) {
+          hold.judgement = "decent";
+          hold.judgementStatus = "completed";
+          clearHoldBindings(hold);
+        } else {
+          finalizeNote(hold, "hollow", hold.emptySinceChartTime);
+          return;
+        }
+      }
+    }
+    if (hold.judgementStatus === "completed" && hold.endTime <= chartTime) {
+      finalizeNote(hold, hold.judgement, chartTime);
     }
   });
-  if (!best || bestDelta > windowSeconds) return;
-  best.judged = true;
-  best.hit = true;
+}
+
+function updateJudgementState(chartTime) {
+  const looseWindow = currentJudgementWindows().loose;
+  gameplayState.noteQueues.forEach((queue) => {
+    advanceJudgementCursor(queue);
+    while (
+      queue.cursor < queue.notes.length
+      && queue.notes[queue.cursor].hitTime < chartTime - looseWindow
+    ) {
+      finalizeNote(queue.notes[queue.cursor], "hollow", chartTime);
+      advanceJudgementCursor(queue);
+    }
+  });
+  updateActiveHolds(chartTime);
+}
+
+function syncGameplayCycle(chartTime) {
+  if (chartTime + 0.001 < gameplayState.lastChartTime) resetGameplayState();
+  gameplayState.lastChartTime = chartTime;
+}
+
+function advanceGameplay(chartTime) {
+  syncGameplayCycle(chartTime);
+  updateJudgementState(chartTime);
 }
 
 window.addEventListener("keydown", (event) => {
-  if (event.repeat) return;
   if (event.code === "Equal") {
     event.preventDefault();
+    if (event.repeat) return;
     setFreeCamera(!debugFreeCamera);
     return;
   }
-  if (leftKeyCodes.has(event.code)) judgeSideInput("left");
-  if (rightKeyCodes.has(event.code)) judgeSideInput("right");
+  if (!gameplayKeyCodes.has(event.code)) return;
+  event.preventDefault();
+  if (event.repeat) return;
+
+  const judgeChartTime = getJudgeChartTime();
+  syncGameplayCycle(judgeChartTime);
+  const inputTypes = inputTypesForCode(event.code);
+  inputTypes.forEach((inputType) => {
+    attachKeyToActiveHolds(inputType, event.code, judgeChartTime);
+  });
+  updateJudgementState(judgeChartTime);
+  for (const inputType of inputTypes) {
+    if (tryJudgeInputType(inputType, event.code, judgeChartTime)) break;
+  }
+});
+
+window.addEventListener("keyup", (event) => {
+  if (!gameplayKeyCodes.has(event.code)) return;
+  event.preventDefault();
+  releaseGameplayKey(event.code, getJudgeChartTime());
+});
+
+window.addEventListener("blur", () => {
+  releaseAllGameplayKeys(getJudgeChartTime());
+});
+
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) releaseAllGameplayKeys(getJudgeChartTime());
 });
 
 function easeInCubic(t) {
@@ -1750,16 +2276,31 @@ function smoothstep(edge0, edge1, value) {
   return x * x * (3 - 2 * x);
 }
 
-function noteVisibility(progress) {
-  const fadeIn = smoothstep(0.0, 0.12, progress);
-  const fadeOut = 1 - smoothstep(1.005, 1.055, progress);
-  return fadeIn * fadeOut;
+function postHitVisibility(timeToHit) {
+  if (timeToHit >= 0) return 1;
+  return smoothstep(-timingConfig.postHitFadeSeconds, 0, timeToHit);
 }
 
-function holdVisibility(headProgress, tailProgress) {
+function noteVisibility(progress, timeToHit) {
+  const fadeIn = smoothstep(0.0, 0.12, progress);
+  return fadeIn * postHitVisibility(timeToHit);
+}
+
+function capturedNoteVisibility(note, chartTime) {
+  if (note.capturedAtChartTime === null) return 1;
+  let elapsed = chartTime - note.capturedAtChartTime;
+  if (elapsed < 0) elapsed += timingConfig.chartDuration;
+  const fadeSeconds = note.earlyLoose ? 0.22 : 0.09;
+  return 1 - smoothstep(0, fadeSeconds, elapsed);
+}
+
+function holdVisibility(headProgress, tailTimeToHit) {
   const fadeIn = smoothstep(0.0, 0.12, headProgress);
-  const fadeOut = 1 - smoothstep(1.005, 1.055, tailProgress);
-  return fadeIn * fadeOut;
+  return fadeIn * postHitVisibility(tailTimeToHit);
+}
+
+function holdStateOpacity(note) {
+  return note.judgementStatus === "judged" && note.judgement === "hollow" ? 0.1 : 1;
 }
 
 function noteTravelFactor(progress) {
@@ -1907,7 +2448,7 @@ function updateSpaceSatellites(note, t, opacity) {
   });
 }
 
-function updateHoldNoteVisual(note, segment, opacity, t) {
+function updateHoldNoteVisual(note, segment, opacity, t, chartTime) {
   const { head, bodyParticles } = note.mesh.userData;
   const start = segment.head.position;
   const end = segment.tail.position;
@@ -1972,9 +2513,12 @@ function updateHoldNoteVisual(note, segment, opacity, t) {
     particle.visible = localOpacity > 0.02;
   });
 
-  updateSphereNoteVisual(head, opacity, head.userData.baseScale, 0);
+  const hitFlash = head.userData.hitFlash ?? 0;
+  const headOpacity = opacity * capturedNoteVisibility(note, chartTime);
+  updateSphereNoteVisual(head, headOpacity, head.userData.baseScale, hitFlash);
+  head.userData.hitFlash = Math.max(0, hitFlash - 0.08);
   if (isSpaceNote(note)) {
-    updateSpaceSatellites({ ...note, mesh: head }, t, opacity);
+    updateSpaceSatellites({ ...note, mesh: head }, t, headOpacity);
   }
   note.mesh.visible = opacity > 0.02;
 }
@@ -1984,8 +2528,10 @@ function updateNotes(t, chartTime) {
   notes.forEach((note) => {
     if (isHoldNote(note)) {
       const segment = holdSegment(note, chartTime);
-      const opacity = note.mesh.userData.baseOpacity * holdVisibility(segment.head.progress, segment.tail.progress);
-      updateHoldNoteVisual(note, segment, opacity, t);
+      const opacity = note.mesh.userData.baseOpacity
+        * holdVisibility(segment.head.progress, segment.tail.timeToHit)
+        * holdStateOpacity(note);
+      updateHoldNoteVisual(note, segment, opacity, t, chartTime);
       if (opacity > 0.02) {
         visibleNotes.push({
           note,
@@ -2006,22 +2552,24 @@ function updateNotes(t, chartTime) {
     const isPlayable = isPlayableNote(note);
     const pulseScale = isPlayable ? Math.sin(t * 5 + note.pulse) * 0.035 : 0;
     const scale = note.mesh.userData.baseScale * (1 + pulseScale);
-    const visibility = noteVisibility(progress);
+    const visibility = noteVisibility(progress, timeToHit) * capturedNoteVisibility(note, chartTime);
     const hitFlash = isPlayable ? (note.mesh.userData.hitFlash ?? 0) : 0;
     const opacity = note.mesh.userData.baseOpacity * visibility * (1 + hitFlash * 0.45);
 
     updateSphereNoteVisual(note.mesh, opacity, scale, hitFlash);
     if (isSpaceNote(note)) updateSpaceSatellites(note, t, opacity);
     note.mesh.userData.hitFlash = isPlayable ? Math.max(0, hitFlash - 0.08) : 0;
-    visibleNotes.push({
-      note,
-      progress,
-      timeToHit,
-      opacity,
-      visibility,
-      connectionPosition: position.clone(),
-      wPos: note.wPos
-    });
+    if (opacity > 0.02) {
+      visibleNotes.push({
+        note,
+        progress,
+        timeToHit,
+        opacity,
+        visibility,
+        connectionPosition: position.clone(),
+        wPos: note.wPos
+      });
+    }
   });
   return visibleNotes;
 }
@@ -2049,6 +2597,7 @@ function updateLandingHints(visibleNotes) {
     const hint = landingHintPool[hintIndex];
     hint.position.copy(targetInfo.position);
     hint.quaternion.copy(targetInfo.quaternion);
+    hint.material.color.copy(noteColor(item.note));
     hint.scale.setScalar(baseScale + nearHit * hitScale);
     const hintOpacity = chartState.motionMode === "receiver-catch"
       ? baseOpacity + nearHit * hitOpacity
@@ -2059,7 +2608,7 @@ function updateLandingHints(visibleNotes) {
   });
 }
 
-function writeConnectionGeometry(line, a, b, color, opacityScale) {
+function writeConnectionGeometry(line, a, b, color, opacityScale, opacityOverride = null) {
   const start = a.connectionPosition ?? a.note.mesh.position;
   const end = b.connectionPosition ?? b.note.mesh.position;
   const delta = end.clone().sub(start);
@@ -2076,7 +2625,7 @@ function writeConnectionGeometry(line, a, b, color, opacityScale) {
   for (let i = 0; i <= segmentCount; i += 1) {
     const u = i / segmentCount;
     const point = start.clone().lerp(end, u);
-    const alpha = THREE.MathUtils.lerp(a.opacity, b.opacity, u) * opacityScale;
+    const alpha = (opacityOverride ?? THREE.MathUtils.lerp(a.opacity, b.opacity, u)) * opacityScale;
     positions.push(
       point.x + side.x, point.y + side.y, point.z + side.z,
       point.x - side.x, point.y - side.y, point.z - side.z
@@ -2100,14 +2649,6 @@ function writeConnectionGeometry(line, a, b, color, opacityScale) {
   return true;
 }
 
-function noteColor(note) {
-  if (note.type === "left") return palette.left;
-  if (note.type === "right") return palette.right;
-  if (isSpaceNote(note)) return palette.space;
-  if (isTopNote(note)) return palette.top;
-  return palette.white;
-}
-
 function connectionColor(a, b) {
   return noteColor(a.note).clone().lerp(noteColor(b.note), 0.5);
 }
@@ -2118,45 +2659,27 @@ function updateNoteConnectionLines(visibleNotes) {
   });
 
   let lineIndex = 0;
-  const connect = (a, b, opacityScale, color = connectionColor(a, b)) => {
+  const connect = (a, b, opacityScale, color = connectionColor(a, b), opacityOverride = null) => {
     if (lineIndex >= linePool.length) return;
-    if (writeConnectionGeometry(linePool[lineIndex], a, b, color, opacityScale)) {
+    if (writeConnectionGeometry(linePool[lineIndex], a, b, color, opacityScale, opacityOverride)) {
       lineIndex += 1;
     }
   };
 
   const visibleItems = visibleNotes.filter((item) => item.opacity > 0.02);
-  const middleNotesByTime = new Map();
-  visibleItems.forEach((item) => {
-    if (!isMiddleNote(item.note)) return;
-    if (!middleNotesByTime.has(item.note.hitTime)) middleNotesByTime.set(item.note.hitTime, []);
-    middleNotesByTime.get(item.note.hitTime).push(item);
+  const visibleItemByNote = new Map(visibleItems.map((item) => [item.note, item]));
+  chartState.constellationEdges.forEach((edge) => {
+    const from = visibleItemByNote.get(edge.from);
+    const to = visibleItemByNote.get(edge.to);
+    if (!from || !to) return;
+    connect(
+      from,
+      to,
+      renderConfig.constellationLineOpacity,
+      palette.white,
+      Math.min(from.opacity, to.opacity)
+    );
   });
-
-  const constellationLayers = [...middleNotesByTime.entries()]
-    .sort(([timeA], [timeB]) => timeA - timeB)
-    .map(([, simultaneousNotes]) => {
-      simultaneousNotes.sort((a, b) => (a.wPos ?? 0) - (b.wPos ?? 0));
-      return simultaneousNotes.length === 1
-        ? [simultaneousNotes[0]]
-        : [simultaneousNotes[0], simultaneousNotes[simultaneousNotes.length - 1]];
-    });
-
-  const connectConstellationNodes = (a, b) => {
-    connect(a, b, renderConfig.constellationLineOpacity, palette.white);
-  };
-  for (let i = 0; i < constellationLayers.length - 1; i += 1) {
-    const currentLayer = constellationLayers[i];
-    const nextLayer = constellationLayers[i + 1];
-    if (currentLayer.length === 2 && nextLayer.length === 2) {
-      connectConstellationNodes(currentLayer[0], nextLayer[0]);
-      connectConstellationNodes(currentLayer[1], nextLayer[1]);
-    } else {
-      currentLayer.forEach((currentNode) => {
-        nextLayer.forEach((nextNode) => connectConstellationNodes(currentNode, nextNode));
-      });
-    }
-  }
 
   const hitGroups = new Map();
   visibleItems.forEach((item) => {
@@ -2238,7 +2761,12 @@ function animate() {
   const beat = 0.5 + 0.5 * Math.sin(t * Math.PI * 2 * 1.2);
   const slowBeat = 0.5 + 0.5 * Math.sin(t * Math.PI * 2 * 0.4);
 
-  chartState.chartTime = ((t - chartState.startTime) % timingConfig.chartDuration + timingConfig.chartDuration) % timingConfig.chartDuration;
+  if (t > gameplayState.feedbackUntil && logicStateReadout.textContent !== "on") {
+    logicStateReadout.textContent = "on";
+  }
+
+  chartState.chartTime = getLiveChartTime();
+  advanceGameplay(chartState.chartTime);
   updateReceiverAnchor();
   updateSideTrajectories(chartState.chartTime);
   const visibleNotes = updateNotes(t, chartState.chartTime);
@@ -2254,6 +2782,7 @@ function animate() {
   }
   updateCameraDebug();
   updateReceiver(t, beat);
+  updateHitEffects(t);
   updateBackgroundParticles(t);
 
   composer.render();
@@ -2301,6 +2830,38 @@ body {
   justify-content: space-between;
   gap: 20px;
   pointer-events: none;
+}
+
+.combo-display {
+  position: absolute;
+  top: 20px;
+  left: 50%;
+  width: 180px;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  pointer-events: none;
+  color: #eaf7ff;
+  text-align: center;
+  text-shadow: 0 0 18px rgba(180, 230, 255, 0.72);
+}
+
+.combo-display span {
+  font-size: 11px;
+  line-height: 1.2;
+  font-weight: 500;
+  letter-spacing: 0;
+  color: rgba(234, 247, 255, 0.72);
+}
+
+.combo-display strong {
+  min-width: 3ch;
+  margin-top: 2px;
+  font-size: 36px;
+  line-height: 1;
+  font-weight: 600;
+  letter-spacing: 0;
 }
 
 .brand {
@@ -2431,20 +2992,13 @@ body {
 }
 
 @media (max-width: 680px) {
-  .hud {
-    left: 16px;
-    right: 16px;
-    top: 14px;
-    align-items: flex-start;
+  .hud,
+  .camera-debug {
+    display: none;
   }
 
-  .meters {
-    max-width: 170px;
-  }
-
-  .meters div {
-    min-width: 58px;
-    padding: 6px 8px;
+  .combo-display {
+    top: 16px;
   }
 
   .legend {
@@ -2453,10 +3007,5 @@ body {
     grid-template-columns: auto auto;
   }
 
-  .camera-debug {
-    right: 16px;
-    bottom: 14px;
-    min-width: 210px;
-  }
 }
 </style>
