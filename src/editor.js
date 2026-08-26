@@ -18,8 +18,8 @@ import {
   speedColor,
   trajectoryPoseAt,
   receiverFrameAt
-} from "./chart-core.js?v=20260826-16";
-import { CONFIG } from "./config.js?v=20260826-16";
+} from "./chart-core.js?v=20260826-23";
+import { CONFIG } from "./config.js?v=20260826-23";
 
 const editorConfig = CONFIG.editor;
 const colorConfig = CONFIG.colors;
@@ -40,6 +40,15 @@ const refs = {
   viewMode: $("#view-mode"),
   dirtyState: $("#dirty-state"),
   status: $("#status-message"),
+  cameraRelativeX: $("#camera-relative-x"),
+  cameraRelativeY: $("#camera-relative-y"),
+  cameraRelativeZ: $("#camera-relative-z"),
+  cameraTargetX: $("#camera-target-x"),
+  cameraTargetY: $("#camera-target-y"),
+  cameraTargetZ: $("#camera-target-z"),
+  cameraRelativeFov: $("#camera-relative-fov"),
+  cameraValueSource: $("#camera-value-source"),
+  addCameraKeyframe: $("#add-camera-keyframe"),
   title: $("#meta-title"),
   composer: $("#meta-composer"),
   charter: $("#meta-charter"),
@@ -110,12 +119,19 @@ const state = {
   previewNoteCursor: 0,
   previewNoteTime: null,
   continuousEdit: null,
-  waveformPitch: null
+  waveformPitch: null,
+  liveCamera: null
 };
 
 const svgNamespace = "http://www.w3.org/2000/svg";
 const noteLayout = editorConfig.noteLayout;
 const noteTypeLabels = editorConfig.noteTypeLabels;
+const timelineDefinitionsById = new Map(TIMELINE_DEFINITIONS.map((definition) => [definition.id, definition]));
+const cameraTimelineIds = [
+  "cameraX", "cameraY", "cameraZ",
+  "cameraTargetX", "cameraTargetY", "cameraTargetZ",
+  "cameraFov"
+];
 const makeSvg = (name, attributes = {}) => {
   const element = document.createElementNS(svgNamespace, name);
   Object.entries(attributes).forEach(([key, value]) => element.setAttribute(key, value));
@@ -127,6 +143,16 @@ function formatTime(seconds) {
   const minutes = Math.floor(value / 60);
   const remainder = value - minutes * 60;
   return `${String(minutes).padStart(2, "0")}:${remainder.toFixed(3).padStart(6, "0")}`;
+}
+
+function formatSigned(value) {
+  const normalized = Math.abs(value) < 0.0005 ? 0 : value;
+  return `${normalized >= 0 ? "+" : ""}${normalized.toFixed(2)}`;
+}
+
+function timelineValueAt(timelineId, time = state.currentTime) {
+  const definition = timelineDefinitionsById.get(timelineId);
+  return sampleTimeline(state.chart.timelines[timelineId], time, definition?.defaultValue ?? 0);
 }
 
 function setStatus(message) {
@@ -362,6 +388,13 @@ window.addEventListener("message", (event) => {
     toggleView();
   } else if (event.data?.type === "ParticleSoarEditorTogglePanel") {
     setEditorPanelOpen(!state.editorPanelOpen);
+  } else if (event.data?.type === "ParticleSoarEditorTogglePlayback") {
+    togglePlayback();
+  } else if (event.data?.type === "ParticleSoarEditorAddCameraKeyframe") {
+    addCameraKeyframesAtCurrentTime();
+  } else if (event.data?.type === "ParticleSoarPreviewCamera") {
+    state.liveCamera = event.data.camera;
+    updateCameraState();
   }
 });
 
@@ -560,6 +593,7 @@ function updatePreviewPose() {
 
 function toggleView() {
   state.viewMode = state.viewMode === "global" ? "play" : "global";
+  if (state.viewMode === "global") state.liveCamera = null;
   refs.viewMode.textContent = state.viewMode === "global" ? "FREE" : "PLAY";
   controls.enabled = false;
   updatePreviewSurface({ reloadGame: state.viewMode === "play" });
@@ -701,7 +735,7 @@ function appendNoteShape(group, note, x, y) {
 
 function renderNoteEditor({ waveform = true } = {}) {
   const scrollTop = refs.noteScroll.scrollTop;
-  const width = Math.max(420, refs.noteGrid.clientWidth || refs.noteScroll.clientWidth - editorConfig.waveform.width);
+  const width = Math.max(1, refs.noteGrid.clientWidth || refs.noteScroll.clientWidth - editorConfig.waveform.width);
   const height = contentHeight();
   refs.noteContent.style.height = `${height}px`;
   refs.noteGrid.setAttribute("viewBox", `0 0 ${width} ${height}`);
@@ -926,6 +960,43 @@ function createTimelineCurve(events, range, height, color) {
   return curve;
 }
 
+function updateTimelineCurrentValues() {
+  refs.eventTimelines.querySelectorAll(".timeline-value-marker").forEach((marker) => {
+    const column = marker.closest(".timeline-column");
+    const timelineId = column.dataset.timelineId;
+    const range = {
+      min: Number(column.dataset.rangeMin),
+      max: Number(column.dataset.rangeMax)
+    };
+    const value = timelineValueAt(timelineId);
+    marker.textContent = value.toFixed(2);
+    marker.style.left = `${eventX(value, range)}%`;
+    marker.style.top = `${timeToY(state.currentTime)}px`;
+  });
+}
+
+function timelineCameraValues(time = state.currentTime) {
+  return Object.fromEntries(cameraTimelineIds.map((timelineId) => [timelineId, timelineValueAt(timelineId, time)]));
+}
+
+function cameraValuesForEditing(time = state.currentTime) {
+  if (state.viewMode === "global" && state.liveCamera) return state.liveCamera;
+  return timelineCameraValues(time);
+}
+
+function updateCameraState() {
+  const values = cameraValuesForEditing();
+  const live = state.viewMode === "global" && Boolean(state.liveCamera);
+  refs.cameraValueSource.textContent = `${live ? "LIVE" : "CHART"} · RECEIVER RELATIVE`;
+  refs.cameraRelativeX.textContent = formatSigned(values.cameraX);
+  refs.cameraRelativeY.textContent = formatSigned(values.cameraY);
+  refs.cameraRelativeZ.textContent = formatSigned(values.cameraZ);
+  refs.cameraTargetX.textContent = formatSigned(values.cameraTargetX);
+  refs.cameraTargetY.textContent = formatSigned(values.cameraTargetY);
+  refs.cameraTargetZ.textContent = formatSigned(values.cameraTargetZ);
+  refs.cameraRelativeFov.textContent = values.cameraFov.toFixed(2);
+}
+
 function renderEventTimelines() {
   const scrollTop = refs.eventTimelines.scrollTop;
   const scrollLeft = refs.eventTimelines.scrollLeft;
@@ -933,6 +1004,15 @@ function renderEventTimelines() {
   const content = document.createElement("div");
   content.className = "event-content";
   content.style.height = `${height}px`;
+  content.style.minWidth = `${TIMELINE_DEFINITIONS.length * 108}px`;
+  content.style.gridTemplateColumns = `repeat(${TIMELINE_DEFINITIONS.length}, minmax(100px, 1fr))`;
+
+  gridTimes(state.chart).forEach((grid) => {
+    const line = document.createElement("div");
+    line.className = `event-grid-line${grid.beat ? " beat" : ""}${grid.major ? " major" : ""}`;
+    line.style.top = `${timeToY(grid.time)}px`;
+    content.appendChild(line);
+  });
 
   TIMELINE_DEFINITIONS.forEach((definition) => {
     const events = state.chart.timelines[definition.id];
@@ -942,6 +1022,7 @@ function renderEventTimelines() {
     column.dataset.timelineId = definition.id;
     column.dataset.rangeMin = range.min;
     column.dataset.rangeMax = range.max;
+    column.style.setProperty("--event-color", definition.color);
     column.innerHTML = `<div class="timeline-label"><strong>${definition.label}</strong><span>${range.min.toFixed(2)}…${range.max.toFixed(2)}</span></div>`;
     column.appendChild(createTimelineCurve(events, range, height, definition.color));
     events.forEach((event) => {
@@ -956,6 +1037,12 @@ function renderEventTimelines() {
       key.title = `${event.time.toFixed(3)}s · ${event.value}`;
       column.appendChild(key);
     });
+    const marker = document.createElement("output");
+    marker.className = "timeline-value-marker";
+    marker.textContent = timelineValueAt(definition.id).toFixed(2);
+    marker.style.left = `${eventX(timelineValueAt(definition.id), range)}%`;
+    marker.style.top = `${timeToY(state.currentTime)}px`;
+    column.appendChild(marker);
     content.appendChild(column);
   });
   const playhead = document.createElement("div");
@@ -963,9 +1050,62 @@ function renderEventTimelines() {
   playhead.style.top = `${timeToY(state.currentTime)}px`;
   content.appendChild(playhead);
   refs.eventTimelines.replaceChildren(content);
+  const scrollbarHeight = Math.max(0, refs.noteScroll.clientHeight - refs.eventTimelines.clientHeight);
+  if (scrollbarHeight > 0) {
+    const adjustedHeight = Math.max(refs.eventTimelines.clientHeight, height - scrollbarHeight);
+    content.style.height = `${adjustedHeight}px`;
+    content.querySelectorAll(".timeline-curve").forEach((curve) => {
+      curve.setAttribute("viewBox", `0 0 100 ${adjustedHeight}`);
+    });
+  }
   refs.eventTimelines.scrollTop = scrollTop;
   refs.eventTimelines.scrollLeft = scrollLeft;
   refs.selectedEventCount.textContent = state.selectedEvents.size;
+}
+
+function addCameraKeyframesAtCurrentTime() {
+  const time = state.currentTime;
+  const sampledValues = cameraValuesForEditing(time);
+  const existing = Object.fromEntries(cameraTimelineIds.map((timelineId) => [
+    timelineId,
+    state.chart.timelines[timelineId].find((event) => Math.abs(event.time - time) < 0.0005)
+  ]));
+  const missingIds = cameraTimelineIds.filter((timelineId) => !existing[timelineId]);
+  const valuesChanged = cameraTimelineIds.some((timelineId) => (
+    existing[timelineId]
+    && Math.abs(existing[timelineId].value - sampledValues[timelineId]) >= 0.000001
+  ));
+
+  if (missingIds.length === 0 && !valuesChanged) {
+    state.selectedNotes.clear();
+    state.selectedEvents = new Set(cameraTimelineIds.map((timelineId) => eventToken(timelineId, existing[timelineId].id)));
+    renderNoteEditor();
+    renderEventTimelines();
+    renderInspector();
+    setStatus(`${time.toFixed(3)}s 的相机关键帧已是当前视角`);
+    return;
+  }
+
+  commitChange(() => {
+    state.selectedNotes.clear();
+    state.selectedEvents.clear();
+    cameraTimelineIds.forEach((timelineId) => {
+      let timelineEvent = existing[timelineId];
+      if (!timelineEvent) {
+        timelineEvent = {
+          id: crypto.randomUUID(),
+          time,
+          value: sampledValues[timelineId],
+          easing: "linear",
+          formula: "t"
+        };
+        state.chart.timelines[timelineId].push(timelineEvent);
+      } else {
+        timelineEvent.value = sampledValues[timelineId];
+      }
+      state.selectedEvents.add(eventToken(timelineId, timelineEvent.id));
+    });
+  }, `已在 ${time.toFixed(3)}s 写入当前相机视角`);
 }
 
 function addTimelineEvent(event, column) {
@@ -1214,6 +1354,8 @@ function updateTimeUi(scrollIntoView = false) {
   const activeBpmKey = bpmKeyAt(state.chart, state.currentTime);
   refs.currentBpm.textContent = activeBpmKey.bpm.toFixed(2);
   refs.currentBeats.textContent = String(activeBpmKey.beatsPerBar);
+  updateTimelineCurrentValues();
+  updateCameraState();
   updatePreviewPose();
   if (scrollIntoView) {
     const target = Math.max(0, timeToY(state.currentTime) - refs.noteScroll.clientHeight * 0.55);
@@ -1450,17 +1592,27 @@ window.addEventListener("pointermove", handlePointerMove);
 window.addEventListener("pointerup", handlePointerUp);
 window.addEventListener("pointercancel", handlePointerUp);
 
+function synchronizeTimelineScroll(source, target) {
+  const sharedTop = Math.min(
+    source.scrollTop,
+    Math.max(0, source.scrollHeight - source.clientHeight),
+    Math.max(0, target.scrollHeight - target.clientHeight)
+  );
+  source.scrollTop = sharedTop;
+  target.scrollTop = sharedTop;
+}
+
 refs.noteScroll.addEventListener("scroll", () => {
   if (state.syncingScroll) return;
   state.syncingScroll = true;
-  refs.eventTimelines.scrollTop = refs.noteScroll.scrollTop;
+  synchronizeTimelineScroll(refs.noteScroll, refs.eventTimelines);
   state.syncingScroll = false;
 });
 
 refs.eventTimelines.addEventListener("scroll", () => {
   if (state.syncingScroll) return;
   state.syncingScroll = true;
-  refs.noteScroll.scrollTop = refs.eventTimelines.scrollTop;
+  synchronizeTimelineScroll(refs.eventTimelines, refs.noteScroll);
   state.syncingScroll = false;
 });
 
@@ -1764,6 +1916,7 @@ refs.chartFile.addEventListener("change", () => loadChartFile(refs.chartFile.fil
 refs.audioFile.addEventListener("change", () => loadAudio(refs.audioFile.files[0]).catch((error) => setStatus(`音乐加载失败：${error.message}`)));
 refs.panelToggle.addEventListener("click", () => setEditorPanelOpen(!state.editorPanelOpen));
 refs.viewToggle.addEventListener("click", toggleView);
+refs.addCameraKeyframe.addEventListener("click", addCameraKeyframesAtCurrentTime);
 
 window.addEventListener("keydown", (event) => {
   const typingTarget = event.target.matches("input:not([type='range']), select, textarea, [contenteditable='true']");
@@ -1779,6 +1932,9 @@ window.addEventListener("keydown", (event) => {
   } else if (event.code === "Space") {
     event.preventDefault();
     togglePlayback();
+  } else if (event.code === "KeyK") {
+    event.preventDefault();
+    if (!event.repeat) addCameraKeyframesAtCurrentTime();
   } else if (event.code === "Delete" || event.code === "Backspace") {
     event.preventDefault();
     if (state.selectedNotes.size) $("#delete-selection").click();

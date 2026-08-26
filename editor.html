@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>ParticleSoar Chart Editor</title>
-  <link rel="stylesheet" href="./editor.css">
+  <link rel="stylesheet" href="./editor.css?v=20260826-23">
   <script type="importmap">
   {
     "imports": {
@@ -18,12 +18,32 @@
   <div class="editor-shell editor-panel-collapsed">
     <section class="preview-stage" aria-label="3D trajectory preview">
       <canvas id="preview-canvas" hidden></canvas>
-      <iframe id="game-preview" src="./index.html?editorPreview=1&v=20260826-16" title="游玩场景预览"></iframe>
+      <iframe id="game-preview" src="./index.html?editorPreview=1&v=20260826-23" title="游玩场景预览"></iframe>
       <div class="preview-state">
         <span id="dirty-state">已保存</span>
         <button id="view-toggle" type="button" title="切换自由/游玩视角"><strong id="view-mode">FREE</strong></button>
       </div>
     </section>
+    <div class="camera-state" aria-label="相机相对参数">
+      <div class="camera-readout">
+        <div class="camera-readout-heading"><strong>CAMERA</strong><span id="camera-value-source">CHART · RECEIVER RELATIVE</span></div>
+        <div class="camera-values">
+          <span>POS X <strong id="camera-relative-x">+0.00</strong></span>
+          <span>Y <strong id="camera-relative-y">+0.00</strong></span>
+          <span>Z <strong id="camera-relative-z">+42.00</strong></span>
+          <span>LOOK X <strong id="camera-target-x">+0.00</strong></span>
+          <span>Y <strong id="camera-target-y">+0.00</strong></span>
+          <span>Z <strong id="camera-target-z">+0.00</strong></span>
+          <span>FOV <strong id="camera-relative-fov">44.00</strong></span>
+        </div>
+      </div>
+      <button
+        id="add-camera-keyframe"
+        type="button"
+        title="在当前时间添加全部相机关键帧（K）"
+        aria-label="在当前时间添加全部相机关键帧"
+      >＋ KEY</button>
+    </div>
     <button
       id="toggle-editor-panel"
       class="editor-panel-toggle"
@@ -155,7 +175,7 @@
 
       <footer class="statusbar">
         <span id="status-message">就绪</span>
-        <span>左键放置/选择 · 右键拖拽擦除 · E 编辑区 · = 视角</span>
+        <span>左键放置/选择 · 右键拖拽擦除 · E 编辑区 · = 视角 · K 相机帧</span>
       </footer>
     </div>
   </div>
@@ -164,6 +184,6 @@
   <input id="audio-file-input" type="file" accept="audio/*" hidden>
   <audio id="audio-player" preload="auto"></audio>
 
-  <script type="module" src="./src/editor.js?v=20260826-16"></script>
+  <script type="module" src="./src/editor.js?v=20260826-23"></script>
 </body>
 </html>

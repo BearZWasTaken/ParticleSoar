@@ -263,6 +263,68 @@ label {
   font-size: 12px;
 }
 
+.camera-state {
+  position: absolute;
+  z-index: 12;
+  top: 58px;
+  right: 14px;
+  display: flex;
+  padding: 6px;
+  border: 1px solid rgba(237, 242, 245, 0.16);
+  border-radius: 3px;
+  align-items: stretch;
+  gap: 6px;
+  background: rgba(7, 9, 12, 0.72);
+  backdrop-filter: blur(8px);
+}
+
+.camera-readout {
+  display: grid;
+  gap: 5px;
+}
+
+.camera-readout-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.camera-readout-heading strong {
+  color: var(--cyan);
+  font-size: 10px;
+}
+
+.camera-readout-heading span {
+  color: var(--muted);
+  font-size: 8px;
+}
+
+.camera-values {
+  display: grid;
+  min-width: 270px;
+  grid-template-columns: repeat(3, minmax(78px, 1fr));
+  align-content: center;
+  gap: 3px 8px;
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 10px;
+}
+
+.camera-values strong {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.camera-state button {
+  min-width: 58px;
+  pointer-events: auto;
+  background: rgba(18, 22, 28, 0.86);
+  color: var(--cyan);
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 10px;
+}
+
 .transport {
   position: absolute;
   z-index: 20;
@@ -477,7 +539,8 @@ label {
 .event-timelines {
   position: relative;
   min-height: 0;
-  overflow: auto;
+  overflow-x: scroll;
+  overflow-y: auto;
   background: rgba(14, 16, 20, 0.5);
 }
 
@@ -493,8 +556,6 @@ label {
   position: relative;
   min-width: 0;
   border-right: 1px solid var(--line);
-  background-image: linear-gradient(to bottom, transparent calc(100% - 1px), rgba(255, 255, 255, 0.05) 0);
-  background-size: 100% 72px;
   cursor: crosshair;
 }
 
@@ -540,6 +601,25 @@ label {
   filter: drop-shadow(0 0 3px color-mix(in srgb, var(--event-color, var(--cyan)) 36%, transparent));
 }
 
+.event-grid-line {
+  position: absolute;
+  z-index: 2;
+  right: 0;
+  left: 0;
+  height: 1px;
+  background: rgba(237, 242, 245, 0.1);
+  pointer-events: none;
+}
+
+.event-grid-line.beat {
+  background: rgba(237, 242, 245, 0.18);
+}
+
+.event-grid-line.major {
+  height: 1.4px;
+  background: rgba(237, 242, 245, 0.34);
+}
+
 .timeline-playhead {
   position: absolute;
   z-index: 4;
@@ -547,6 +627,24 @@ label {
   left: 0;
   height: 1px;
   background: rgba(255, 255, 255, 0.72);
+  pointer-events: none;
+}
+
+.timeline-value-marker {
+  position: absolute;
+  z-index: 6;
+  min-width: 42px;
+  padding: 2px 4px;
+  border: 1px solid color-mix(in srgb, var(--event-color, var(--cyan)) 68%, #0e1014);
+  border-radius: 2px;
+  transform: translate(-50%, calc(-100% - 4px));
+  background: rgba(10, 12, 16, 0.9);
+  box-shadow: 0 0 8px color-mix(in srgb, var(--event-color, var(--cyan)) 28%, transparent);
+  color: var(--event-color, var(--cyan));
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 9px;
+  line-height: 14px;
+  text-align: center;
   pointer-events: none;
 }
 

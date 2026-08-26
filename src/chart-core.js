@@ -1,4 +1,4 @@
-import { CONFIG } from "./config.js?v=20260826-16";
+import { CONFIG } from "./config.js?v=20260826-23";
 
 const chartConfig = CONFIG.chart;
 const chartDefaults = chartConfig.defaults;
@@ -501,7 +501,11 @@ export function cameraPoseAt(chart, trajectory, time) {
     sampleTimeline(chart.timelines.cameraY, time, timelineDefault.cameraY),
     sampleTimeline(chart.timelines.cameraZ, time, timelineDefault.cameraZ)
   ];
-  const localTarget = [0, 0, 0];
+  const localTarget = [
+    sampleTimeline(chart.timelines.cameraTargetX, time, timelineDefault.cameraTargetX),
+    sampleTimeline(chart.timelines.cameraTargetY, time, timelineDefault.cameraTargetY),
+    sampleTimeline(chart.timelines.cameraTargetZ, time, timelineDefault.cameraTargetZ)
+  ];
   const frame = receiverFrameAt(pose);
   const mountVector = (point) => transformByFrame(
     point.map((value, index) => value - referencePosition[index]),
@@ -613,6 +617,9 @@ export function chartForGame(chart) {
       CameraX: bakeTimeline(normalized.timelines.cameraX, timelineDefault.cameraX),
       CameraY: bakeTimeline(normalized.timelines.cameraY, timelineDefault.cameraY),
       CameraZ: bakeTimeline(normalized.timelines.cameraZ, timelineDefault.cameraZ, timelineDefault.cameraZ),
+      CameraTargetX: bakeTimeline(normalized.timelines.cameraTargetX, timelineDefault.cameraTargetX),
+      CameraTargetY: bakeTimeline(normalized.timelines.cameraTargetY, timelineDefault.cameraTargetY),
+      CameraTargetZ: bakeTimeline(normalized.timelines.cameraTargetZ, timelineDefault.cameraTargetZ),
       CameraFov: bakeTimeline(normalized.timelines.cameraFov, timelineDefault.cameraFov, timelineDefault.cameraFov)
     },
     notes: normalized.notes.map((note) => ({

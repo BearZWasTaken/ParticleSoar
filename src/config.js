@@ -24,6 +24,9 @@ export const CONFIG = deepFreeze({
       { id: "cameraX", label: "相机 X", color: "#ff8fba", defaultValue: 0 },
       { id: "cameraY", label: "相机 Y", color: "#c7a8ff", defaultValue: 0 },
       { id: "cameraZ", label: "相机 Z", color: "#8aa8ff", defaultValue: 42 },
+      { id: "cameraTargetX", label: "目标点 X", color: "#ffb38f", defaultValue: 0 },
+      { id: "cameraTargetY", label: "目标点 Y", color: "#a8e8ff", defaultValue: 0 },
+      { id: "cameraTargetZ", label: "目标点 Z", color: "#c8ff8a", defaultValue: 0 },
       { id: "cameraFov", label: "相机 FOV", color: "#f2f8fb", defaultValue: 44 }
     ],
     easingPresetGroups: [
@@ -69,22 +72,18 @@ export const CONFIG = deepFreeze({
         origin: [0, -10, 0]
       },
       timelines: {
-        moveYaw: [[0, 88, "quadInOut"], [10, 150, "quadInOut"], [20, 245, "quadInOut"], [30, 330, "linear"]],
-        movePitch: [[0, 18, "quadInOut"], [15, 28, "quadInOut"], [30, 12, "linear"]],
-        moveSpeed: [[0, 20, "quadInOut"], [10, 32, "quadOut"], [20, 14, "quadIn"], [30, 24, "linear"]],
-        cameraX: [[0, 0, "linear"]],
-        cameraY: [[0, 0, "linear"]],
-        cameraZ: [[0, 42, "linear"]],
-        cameraFov: [[0, 44, "linear"]]
+        moveYaw: [[0, 90, "linear"], [30, 90, "linear"]],
+        movePitch: [[0, 18, "linear"], [30, 18, "linear"]],
+        moveSpeed: [[0, 10, "linear"], [30, 10, "linear"]],
+        cameraX: [[0, 0, "linear"], [30, 0, "linear"]],
+        cameraY: [[0, 0, "linear"], [30, 0, "linear"]],
+        cameraZ: [[0, 42, "linear"], [30, 42, "linear"]],
+        cameraTargetX: [[0, 0, "linear"], [30, 0, "linear"]],
+        cameraTargetY: [[0, 0, "linear"], [30, 0, "linear"]],
+        cameraTargetZ: [[0, 0, "linear"], [30, 0, "linear"]],
+        cameraFov: [[0, 44, "linear"], [30, 44, "linear"]]
       },
-      notes: [
-        { type: "middle", kind: "tap", hitTime: 2, wPos: -0.5 },
-        { type: "middle", kind: "hold", hitTime: 3.5, endTime: 5.5, wPos: 0.25 },
-        { type: "left", kind: "tap", hitTime: 6, wPos: -1 },
-        { type: "right", kind: "tap", hitTime: 7, wPos: 1 },
-        { type: "space", kind: "tap", hitTime: 8, wPos: 0 },
-        { type: "top", kind: "tap", hitTime: 9, wPos: 0 }
-      ]
+      notes: []
     }
   },
   colors: {

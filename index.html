@@ -55,8 +55,8 @@ import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js"
 import { Line2 } from "three/addons/lines/Line2.js";
 import { LineGeometry } from "three/addons/lines/LineGeometry.js";
 import { LineMaterial } from "three/addons/lines/LineMaterial.js";
-import { CHART_FORMAT, chartForGame } from "./src/chart-core.js?v=20260826-16";
-import { CONFIG } from "./src/config.js?v=20260826-16";
+import { CHART_FORMAT, chartForGame } from "./src/chart-core.js?v=20260826-23";
+import { CONFIG } from "./src/config.js?v=20260826-23";
 
 const gameConfig = CONFIG.game;
 const colorConfig = CONFIG.colors;
@@ -2085,6 +2085,9 @@ function configureEditorFreeCameraLimits(target = controls.target, minimumMaximu
   camera.updateProjectionMatrix();
 }
 
+let lastEditorCameraPostTime = -Infinity;
+let lastEditorCameraSignature = "";
+
 function setEditorPreviewView(view) {
   editorPreviewView = view === "free" ? "free" : "play";
   const free = editorPreviewView === "free";
@@ -2092,6 +2095,40 @@ function setEditorPreviewView(view) {
   editorRouteRoot.visible = free;
   setFreeCamera(free);
   if (free) frameEditorFreeCamera();
+  lastEditorCameraPostTime = -Infinity;
+  lastEditorCameraSignature = "";
+}
+
+function currentEditorCameraParameters() {
+  const inverseReceiverRotation = receiverState.currentQuaternion.clone().invert();
+  const toReceiverLocal = (worldPoint) => worldPoint.clone()
+    .sub(receiverState.anchor)
+    .applyQuaternion(inverseReceiverRotation)
+    .add(cameraMount.referenceReceiverPosition);
+  const localPosition = toReceiverLocal(camera.position);
+  const localTarget = toReceiverLocal(controls.target);
+  return {
+    cameraX: localPosition.x,
+    cameraY: localPosition.y,
+    cameraZ: localPosition.z,
+    cameraTargetX: localTarget.x,
+    cameraTargetY: localTarget.y,
+    cameraTargetZ: localTarget.z,
+    cameraFov: camera.fov
+  };
+}
+
+function postEditorPreviewCamera(time) {
+  if (!editorPreviewMode || time - lastEditorCameraPostTime < 0.05) return;
+  const cameraParameters = currentEditorCameraParameters();
+  const signature = Object.values(cameraParameters).map((value) => value.toFixed(4)).join("|");
+  if (signature === lastEditorCameraSignature) return;
+  lastEditorCameraPostTime = time;
+  lastEditorCameraSignature = signature;
+  window.parent.postMessage({
+    type: "ParticleSoarPreviewCamera",
+    camera: cameraParameters
+  }, window.location.origin);
 }
 
 loadChart(createDemoChart());
@@ -2558,6 +2595,14 @@ window.addEventListener("keydown", (event) => {
       event.preventDefault();
       if (event.repeat) return;
       window.parent.postMessage({ type: "ParticleSoarEditorTogglePanel" }, window.location.origin);
+    } else if (event.code === "Space") {
+      event.preventDefault();
+      if (event.repeat) return;
+      window.parent.postMessage({ type: "ParticleSoarEditorTogglePlayback" }, window.location.origin);
+    } else if (event.code === "KeyK") {
+      event.preventDefault();
+      if (event.repeat) return;
+      window.parent.postMessage({ type: "ParticleSoarEditorAddCameraKeyframe" }, window.location.origin);
     }
     return;
   }
@@ -3144,6 +3189,7 @@ function animate() {
     const target = applyCameraProfile(t, slowBeat, receiverState.anchor, receiverState.currentQuaternion, cameraOffset);
     controls.target.copy(target);
   }
+  postEditorPreviewCamera(t);
   updateCameraDebug();
   updateReceiver(t, beat);
   updateHitEffects(t);
