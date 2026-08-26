@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ParticleSoar Chart Editor</title>
+  <link rel="stylesheet" href="./editor.css">
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+      "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+    }
+  }
+  </script>
+</head>
+<body>
+  <div class="editor-shell editor-panel-collapsed">
+    <section class="preview-stage" aria-label="3D trajectory preview">
+      <canvas id="preview-canvas" hidden></canvas>
+      <iframe id="game-preview" src="./index.html?editorPreview=1&v=20260826-16" title="游玩场景预览"></iframe>
+      <div class="preview-state">
+        <span id="dirty-state">已保存</span>
+        <button id="view-toggle" type="button" title="切换自由/游玩视角"><strong id="view-mode">FREE</strong></button>
+      </div>
+    </section>
+    <button
+      id="toggle-editor-panel"
+      class="editor-panel-toggle"
+      type="button"
+      title="打开编辑面板"
+      aria-label="打开编辑面板"
+      aria-expanded="false"
+    >&rsaquo;</button>
+
+    <section class="transport">
+      <button id="play-toggle" class="icon-button" type="button" title="播放/暂停" aria-label="播放">▶</button>
+      <button id="stop-button" class="icon-button" type="button" title="停止" aria-label="停止">■</button>
+      <span id="current-time">00:00.000</span>
+      <input id="scrubber" type="range" min="0" max="30" step="0.001" value="0" aria-label="谱面进度">
+      <span id="duration-time">00:30.000</span>
+      <div class="transport-readout"><span>当前 BPM</span><strong id="current-bpm">120.00</strong></div>
+      <div class="transport-readout"><span>拍数</span><strong id="current-beats">4</strong></div>
+    </section>
+
+    <div class="editor-drawer">
+      <header class="topbar">
+      <div class="project-identity">
+        <strong>ParticleSoar</strong>
+        <span>CHART EDITOR</span>
+      </div>
+      <div class="command-strip">
+        <button id="new-chart" type="button">新建</button>
+        <button id="load-chart" type="button">加载谱面</button>
+        <button id="save-chart" type="button">保存谱面</button>
+        <button id="load-audio" type="button">加载音乐</button>
+        <button id="undo-button" class="icon-button" type="button" title="撤销" aria-label="撤销">↶</button>
+        <button id="redo-button" class="icon-button" type="button" title="重做" aria-label="重做">↷</button>
+      </div>
+      <div class="chart-fields">
+        <label>曲名<input id="meta-title"></label>
+        <label>曲师<input id="meta-composer"></label>
+        <label>谱师<input id="meta-charter"></label>
+        <label>曲绘<input id="meta-illustrator"></label>
+        <label>难度<input id="meta-difficulty-label"></label>
+        <label>等级<input id="meta-level" type="number" min="0" step="1"></label>
+        <label>时长<input id="chart-duration" type="number" min="0.1" step="0.1"></label>
+      </div>
+      </header>
+
+    <main class="workspace">
+      <section class="note-panel">
+        <header class="panel-header note-tools">
+          <div class="segmented" id="note-kind-tools" aria-label="音符时值">
+            <button class="active" data-note-kind="tap" type="button">TAP</button>
+            <button data-note-kind="hold" type="button">HOLD</button>
+          </div>
+          <button id="delete-selection" type="button">删除所选</button>
+          <label>缩放<input id="note-zoom" type="range"></label>
+        </header>
+        <div class="note-editor" id="note-scroll">
+          <div class="note-content" id="note-content">
+            <canvas id="waveform-canvas" aria-label="音乐波形"></canvas>
+            <svg id="note-grid" aria-label="音符编辑区"></svg>
+            <div class="playhead-line" id="note-playhead"></div>
+          </div>
+        </div>
+        <footer class="batch-strip">
+          <span><strong id="selected-note-count">0</strong> 个音符已选择</span>
+          <label>&Delta; Time<input id="batch-note-time" type="number" step="0.001" value="0"></label>
+          <label>&Delta; wPos<input id="batch-note-wpos" type="number" step="0.05" value="0"></label>
+          <button id="apply-note-batch" type="button">应用批量修改</button>
+        </footer>
+      </section>
+
+      <section class="event-panel">
+        <header class="panel-header">
+          <strong>事件时间轴</strong>
+          <span>双击轨道添加事件</span>
+        </header>
+        <div class="event-timelines" id="event-timelines"></div>
+        <footer class="batch-strip">
+          <span><strong id="selected-event-count">0</strong> 个事件已选择</span>
+          <label>&Delta; Time<input id="batch-event-time" type="number" step="0.001" value="0"></label>
+          <label>&times; Value<input id="batch-event-scale" type="number" step="0.1" value="1"></label>
+          <button id="apply-event-batch" type="button">应用批量修改</button>
+        </footer>
+      </section>
+
+      <aside class="inspector">
+        <header class="panel-header"><strong>属性</strong></header>
+        <div id="empty-inspector" class="empty-inspector">选择音符或事件</div>
+        <form id="note-inspector" hidden>
+          <h2>音符</h2>
+          <label>类型<output id="inspect-note-type"></output></label>
+          <label>形态<select id="inspect-note-kind"><option value="tap">Tap</option><option value="hold">Hold</option></select></label>
+          <label>Hit Time<input id="inspect-note-time" type="number" step="0.001"></label>
+          <label id="inspect-note-end-row">End Time<input id="inspect-note-end" type="number" step="0.001"></label>
+          <label id="inspect-note-wpos-row">wPos<input id="inspect-note-wpos" type="number" min="-1" max="1" step="0.01"></label>
+        </form>
+        <form id="event-inspector" hidden>
+          <h2 id="inspect-event-title">事件</h2>
+          <label>时间<input id="inspect-event-time" type="number" step="0.001"></label>
+          <label>数值<input id="inspect-event-value" type="number" step="0.01"></label>
+          <label>缓动<select id="inspect-event-easing"></select></label>
+          <label id="formula-row">公式<input id="inspect-event-formula" placeholder="t*t 或 sin(t*pi/2)"></label>
+        </form>
+        <section class="bpm-list-section">
+          <div class="section-heading">
+            <strong>BPM Keys</strong>
+            <div class="section-actions">
+              <button id="add-bpm-key" type="button">在此添加</button>
+              <button id="remove-bpm-key" type="button">删除当前</button>
+            </div>
+          </div>
+          <div id="bpm-key-list"></div>
+          <form id="bpm-key-editor" class="bpm-key-editor">
+            <label>时间<input id="bpm-key-time" type="number" min="0" step="0.001"></label>
+            <label>BPM<input id="bpm-value" type="number" min="1" step="0.01"></label>
+            <label>每小节拍数<input id="bpm-beats-per-bar" type="number" min="1" step="1"></label>
+          </form>
+          <div class="grid-settings">
+            <strong>编辑网格</strong>
+            <label>节拍细分<input id="subdivision" type="number" min="0" step="1" value="4"></label>
+            <label>wPos 格<input id="wpos-division" type="number" min="0" max="31" step="1" value="7"></label>
+          </div>
+        </section>
+        <section class="effect-section">
+          <div class="section-heading"><strong>谱面特效接口</strong><button id="add-effect" type="button">添加</button></div>
+          <p>特效保存为时间、类型、坐标与参数；渲染器可按谱面扩展。</p>
+          <div id="effect-list"></div>
+        </section>
+      </aside>
+    </main>
+
+      <footer class="statusbar">
+        <span id="status-message">就绪</span>
+        <span>左键放置/选择 · 右键拖拽擦除 · E 编辑区 · = 视角</span>
+      </footer>
+    </div>
+  </div>
+
+  <input id="chart-file-input" type="file" accept="application/json,.json" hidden>
+  <input id="audio-file-input" type="file" accept="audio/*" hidden>
+  <audio id="audio-player" preload="auto"></audio>
+
+  <script type="module" src="./src/editor.js?v=20260826-16"></script>
+</body>
+</html>
