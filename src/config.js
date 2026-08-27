@@ -19,8 +19,9 @@ export const CONFIG = deepFreeze({
     },
     timelineDefinitions: [
       { id: "moveYaw", label: "移动方向 Yaw", color: "#70dcff", defaultValue: 90 },
-      { id: "movePitch", label: "移动方向 Pitch", color: "#9af2c5", defaultValue: 18 },
-      { id: "moveSpeed", label: "移动速度", color: "#ffd66b", defaultValue: 20 },
+      { id: "movePitch", label: "移动方向 Pitch", color: "#9af2c5", defaultValue: 0 },
+      { id: "moveSpeed", label: "前进速度", color: "#ffd66b", defaultValue: 10 },
+      { id: "moveStrafeSpeed", label: "横向速度", color: "#f6a6ff", defaultValue: 0 },
       { id: "cameraX", label: "相机 X", color: "#ff8fba", defaultValue: 0 },
       { id: "cameraY", label: "相机 Y", color: "#c7a8ff", defaultValue: 0 },
       { id: "cameraZ", label: "相机 Z", color: "#8aa8ff", defaultValue: 42 },
@@ -72,16 +73,17 @@ export const CONFIG = deepFreeze({
         origin: [0, -10, 0]
       },
       timelines: {
-        moveYaw: [[0, 90, "linear"], [30, 90, "linear"]],
-        movePitch: [[0, 18, "linear"], [30, 18, "linear"]],
-        moveSpeed: [[0, 10, "linear"], [30, 10, "linear"]],
-        cameraX: [[0, 0, "linear"], [30, 0, "linear"]],
-        cameraY: [[0, 0, "linear"], [30, 0, "linear"]],
-        cameraZ: [[0, 42, "linear"], [30, 42, "linear"]],
-        cameraTargetX: [[0, 0, "linear"], [30, 0, "linear"]],
-        cameraTargetY: [[0, 0, "linear"], [30, 0, "linear"]],
-        cameraTargetZ: [[0, 0, "linear"], [30, 0, "linear"]],
-        cameraFov: [[0, 44, "linear"], [30, 44, "linear"]]
+        moveYaw: [[0, 90, "linear"]],
+        movePitch: [[0, 0, "linear"]],
+        moveSpeed: [[0, 10, "linear"]],
+        moveStrafeSpeed: [[0, 0, "linear"]],
+        cameraX: [[0, 0, "linear"]],
+        cameraY: [[0, 0, "linear"]],
+        cameraZ: [[0, 42, "linear"]],
+        cameraTargetX: [[0, 0, "linear"]],
+        cameraTargetY: [[0, 0, "linear"]],
+        cameraTargetZ: [[0, 0, "linear"]],
+        cameraFov: [[0, 44, "linear"]]
       },
       notes: []
     }
@@ -207,8 +209,8 @@ export const CONFIG = deepFreeze({
     input: {
       left: ["Backquote", "Tab", "CapsLock", "ShiftLeft", "Digit1", "Digit2", "Digit3", "KeyQ", "KeyW", "KeyE", "KeyA", "KeyS", "KeyZ", "KeyX"],
       right: ["KeyP", "BracketLeft", "BracketRight", "Backslash", "Semicolon", "Quote", "Enter", "Period", "Slash", "ShiftRight", "Minus", "Equal", "Backspace"],
-      middle: ["Digit4", "Digit5", "Digit6", "Digit7", "Digit8", "Digit9", "Digit0", "KeyR", "KeyT", "KeyY", "KeyU", "KeyI", "KeyO", "KeyD", "KeyF", "KeyG", "KeyH", "KeyJ", "KeyK", "KeyL", "KeyC", "KeyV", "KeyB", "KeyN", "KeyM", "Comma"],
-      top: ["Digit4", "Digit5", "Digit6", "Digit7", "Digit8", "Digit9", "Digit0", "KeyR", "KeyT", "KeyY", "KeyU", "KeyI", "KeyO"],
+      middle: ["KeyR", "KeyT", "KeyY", "KeyU", "KeyI", "KeyO", "KeyD", "KeyF", "KeyG", "KeyH", "KeyJ", "KeyK", "KeyL", "KeyC", "KeyV", "KeyB", "KeyN", "KeyM", "Comma"],
+      top: ["Digit4", "Digit5", "Digit6", "Digit7", "Digit8", "Digit9", "Digit0"],
       space: ["Space"]
     }
   },

@@ -102,7 +102,7 @@ label {
   height: calc(100vh - 46px);
   overflow: hidden;
   border-right: 1px solid var(--line);
-  grid-template-rows: 92px minmax(0, 1fr) 24px;
+  grid-template-rows: 124px minmax(0, 1fr) 24px;
   background: rgba(12, 14, 18, 0.18);
   box-shadow: 18px 0 34px rgba(0, 0, 0, 0.26);
   backdrop-filter: blur(3px);
@@ -145,7 +145,7 @@ label {
   padding: 8px 12px;
   border-bottom: 1px solid var(--line);
   grid-template-columns: 150px minmax(0, 1fr);
-  grid-template-rows: 34px 34px;
+  grid-template-rows: 66px 34px;
   align-items: center;
   gap: 8px 14px;
   background: rgba(16, 18, 22, 0.72);
@@ -166,6 +166,11 @@ label {
   font-size: 10px;
 }
 
+.project-identity b {
+  color: var(--text);
+  font-weight: 600;
+}
+
 .command-strip,
 .chart-fields {
   display: flex;
@@ -175,7 +180,85 @@ label {
 }
 
 .command-strip {
+  flex-wrap: wrap;
+  align-content: center;
   justify-content: flex-end;
+}
+
+.difficulty-manager {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding-right: 6px;
+  border-right: 1px solid var(--line);
+}
+
+.difficulty-manager select {
+  width: 104px;
+  height: 30px;
+}
+
+.difficulty-manager .icon-button {
+  width: 30px;
+  height: 30px;
+}
+
+.editor-dialog {
+  width: min(420px, calc(100vw - 32px));
+  padding: 0;
+  border: 1px solid var(--line);
+  background: rgba(13, 15, 19, 0.98);
+  color: var(--text);
+  box-shadow: 0 18px 80px rgba(0, 0, 0, 0.58);
+}
+
+.editor-dialog::backdrop {
+  background: rgba(0, 0, 0, 0.62);
+}
+
+.editor-dialog form > header,
+.editor-dialog form > footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--line);
+}
+
+.editor-dialog form > footer {
+  justify-content: flex-end;
+  border-top: 1px solid var(--line);
+  border-bottom: 0;
+}
+
+.dialog-fields {
+  display: grid;
+  grid-template-columns: 1fr 88px;
+  gap: 10px;
+  padding: 14px;
+}
+
+.dialog-fields label:last-child {
+  grid-column: 1 / -1;
+}
+
+.dialog-fields input {
+  width: 100%;
+}
+
+.editor-dialog fieldset {
+  display: grid;
+  gap: 8px;
+  margin: 0 14px 14px;
+  padding: 10px 12px 12px;
+  border: 1px solid var(--line);
+}
+
+.editor-dialog fieldset label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .chart-fields {
@@ -470,15 +553,27 @@ label {
   min-height: 100%;
 }
 
+.note-content::before {
+  position: absolute;
+  z-index: 0;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: var(--waveform-width);
+  border-right: 1px solid var(--line);
+  background: #111318;
+  content: "";
+  pointer-events: none;
+}
+
 #waveform-canvas {
   position: absolute;
   z-index: 1;
-  top: 0;
+  top: 40px;
   left: 0;
   width: var(--waveform-width);
-  height: 100%;
-  border-right: 1px solid var(--line);
-  background: #111318;
+  height: calc(100% - 80px);
+  background: transparent;
 }
 
 #note-grid {
@@ -536,12 +631,34 @@ label {
   padding: 4px 7px;
 }
 
+.batch-action-buttons {
+  display: flex;
+  min-width: 0;
+  gap: 4px;
+}
+
+.batch-action-buttons button {
+  min-width: 0;
+  padding-inline: 6px;
+}
+
 .event-timelines {
   position: relative;
   min-height: 0;
   overflow-x: scroll;
   overflow-y: auto;
   background: rgba(14, 16, 20, 0.5);
+  touch-action: none;
+  user-select: none;
+}
+
+.event-selection-rect {
+  position: fixed;
+  z-index: 1000;
+  border: 1px solid rgba(255, 255, 255, 0.9);
+  background: rgba(112, 220, 255, 0.12);
+  box-shadow: 0 0 8px rgba(112, 220, 255, 0.34);
+  pointer-events: none;
 }
 
 .event-content {
@@ -848,9 +965,20 @@ label {
 }
 
 .note-object.selected .note-head,
-.note-object.selected .hold-body {
+.note-object.selected .hold-body,
+.note-object.selected .hold-tail-cap {
   stroke: #ffffff;
   stroke-width: 3;
+}
+
+.note-selection-frame {
+  fill: rgba(255, 255, 255, 0.1);
+  stroke: rgba(255, 255, 255, 0.95);
+  stroke-width: 1.5;
+  stroke-dasharray: 5 3;
+  vector-effect: non-scaling-stroke;
+  pointer-events: none;
+  filter: drop-shadow(0 0 4px rgba(255, 255, 255, 0.72));
 }
 
 .note-head {
@@ -864,6 +992,24 @@ label {
   fill-opacity: 0.22;
   stroke: currentColor;
   stroke-width: 2;
+}
+
+.hold-tail-cap {
+  stroke: currentColor;
+  stroke-width: 2.5;
+  stroke-linecap: round;
+  pointer-events: none;
+}
+
+.hold-tail-handle {
+  fill: transparent;
+  pointer-events: all;
+  cursor: ns-resize;
+}
+
+.note-object.draft {
+  opacity: 0.7;
+  pointer-events: none;
 }
 
 .note-middle { color: #eef8ff; fill: #eef8ff; }

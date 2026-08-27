@@ -18,8 +18,9 @@ import {
   speedColor,
   trajectoryPoseAt,
   receiverFrameAt
-} from "./chart-core.js?v=20260826-23";
-import { CONFIG } from "./config.js?v=20260826-23";
+} from "./chart-core.js?v=20260827-44";
+import { CONFIG } from "./config.js?v=20260827-44";
+import { createProjectZip, projectJson, readProjectZip } from "./project-package.js?v=20260827-44";
 
 const editorConfig = CONFIG.editor;
 const colorConfig = CONFIG.colors;
@@ -39,6 +40,13 @@ const refs = {
   stop: $("#stop-button"),
   viewMode: $("#view-mode"),
   dirtyState: $("#dirty-state"),
+  projectLocation: $("#project-location"),
+  difficultySelect: $("#difficulty-select"),
+  difficultyDialog: $("#difficulty-dialog"),
+  difficultyForm: $("#difficulty-form"),
+  newDifficultyLabel: $("#new-difficulty-label"),
+  newDifficultyLevel: $("#new-difficulty-level"),
+  newDifficultyCharter: $("#new-difficulty-charter"),
   status: $("#status-message"),
   cameraRelativeX: $("#camera-relative-x"),
   cameraRelativeY: $("#camera-relative-y"),
@@ -81,7 +89,9 @@ const refs = {
   effectList: $("#effect-list"),
   audio: $("#audio-player"),
   chartFile: $("#chart-file-input"),
-  audioFile: $("#audio-file-input")
+  projectPackage: $("#project-package-input"),
+  audioFile: $("#audio-file-input"),
+  jacketFile: $("#jacket-file-input")
 };
 
 document.documentElement.style.setProperty("--waveform-width", `${editorConfig.waveform.width}px`);
@@ -120,7 +130,15 @@ const state = {
   previewNoteTime: null,
   continuousEdit: null,
   waveformPitch: null,
-  liveCamera: null
+  liveCamera: null,
+  clipboard: null,
+  projectDirectory: null,
+  projectMeta: null,
+  projectChartFile: null,
+  projectCharts: new Map(),
+  audioSourceFile: null,
+  jacketSourceFile: null,
+  jacketUrl: null
 };
 
 const svgNamespace = "http://www.w3.org/2000/svg";
@@ -335,9 +353,11 @@ function syncGamePreviewChart() {
     gamePreviewChartSyncTimer = null;
   }
   if (!state.gamePreviewReady) return;
+  const previewChart = structuredClone(state.chart);
+  if (state.jacketUrl) previewChart.meta.jacket = state.jacketUrl;
   refs.gamePreview.contentWindow.postMessage({
     type: "ParticleSoarPreviewChart",
-    chart: structuredClone(state.chart),
+    chart: previewChart,
     time: state.currentTime
   }, window.location.origin);
 }
@@ -640,6 +660,23 @@ function xToWPos(x, width) {
   return snapWPos(state.chart, ((x / width - noteLayout.middleStart) / middleWidth) * 2 - 1);
 }
 
+function holdGridStepAt(time) {
+  if (state.chart.timing.subdivision === 0) return 0.001;
+  const key = bpmKeyAt(state.chart, time);
+  return ((60 / key.bpm) * key.beatsPerBar) / state.chart.timing.subdivision;
+}
+
+function defaultHoldEndTime(hitTime) {
+  const duration = state.chart.timing.duration;
+  const step = Math.max(0.001, holdGridStepAt(hitTime));
+  return Math.min(duration, Math.max(hitTime + 0.001, snapTime(state.chart, hitTime + step)));
+}
+
+function holdEndTimeAtY(note, y) {
+  const snapped = snapTime(state.chart, yToTime(y));
+  return snapped > note.hitTime ? snapped : defaultHoldEndTime(note.hitTime);
+}
+
 function noteTypeAtX(x, width) {
   const ratio = x / Math.max(1, width);
   if (ratio < (noteLayout.left + noteLayout.middleStart) / 2) return "left";
@@ -657,14 +694,23 @@ function notePointFromEvent(event) {
   };
 }
 
+function waveformTimelineHeight() {
+  return Math.max(1, state.chart.timing.duration * state.pixelsPerSecond);
+}
+
+function syncWaveformGeometry() {
+  refs.waveform.style.top = `${timeToY(state.chart.timing.duration)}px`;
+  refs.waveform.style.height = `${waveformTimelineHeight()}px`;
+}
+
 function renderWaveform() {
-  const cssHeight = contentHeight();
+  const cssHeight = waveformTimelineHeight();
   const renderHeight = Math.min(editorConfig.waveform.maxRenderHeight, Math.max(1, Math.round(cssHeight)));
   const dpr = Math.min(devicePixelRatio, editorConfig.waveform.maxPixelRatio);
   const waveformWidth = editorConfig.waveform.width;
   refs.waveform.width = Math.round(waveformWidth * dpr);
   refs.waveform.height = Math.round(renderHeight * dpr);
-  refs.waveform.style.height = `${cssHeight}px`;
+  syncWaveformGeometry();
   const context = refs.waveform.getContext("2d");
   context.setTransform(dpr, 0, 0, dpr, 0, 0);
   context.clearRect(0, 0, waveformWidth, renderHeight);
@@ -715,6 +761,19 @@ function appendNoteShape(group, note, x, y) {
       width: 14,
       height: Math.max(2, y - tailY),
       rx: 3
+    }));
+    group.appendChild(makeSvg("line", {
+      class: "hold-tail-cap",
+      x1: x - 9,
+      x2: x + 9,
+      y1: tailY,
+      y2: tailY
+    }));
+    group.appendChild(makeSvg("circle", {
+      class: "hold-tail-handle",
+      cx: x,
+      cy: tailY,
+      r: 10
     }));
   }
   if (note.type === "left" || note.type === "right") {
@@ -779,18 +838,34 @@ function renderNoteEditor({ waveform = true } = {}) {
     }));
   });
 
-  state.chart.notes.forEach((note) => {
+  const appendNote = (note, extraClass = "") => {
+    const selected = state.selectedNotes.has(note.id);
+    const x = noteX(note, width);
+    const y = timeToY(note.hitTime);
     const group = makeSvg("g", {
-      class: `note-object note-${note.type}${state.selectedNotes.has(note.id) ? " selected" : ""}`,
+      class: `note-object note-${note.type}${selected ? " selected" : ""}${extraClass}`,
       "data-note-id": note.id
     });
-    appendNoteShape(group, note, noteX(note, width), timeToY(note.hitTime));
+    if (selected) {
+      const bounds = noteSelectionBounds(note, width);
+      group.appendChild(makeSvg("rect", {
+        class: "note-selection-frame",
+        x: bounds.left - 2,
+        y: bounds.top - 2,
+        width: bounds.right - bounds.left + 4,
+        height: bounds.bottom - bounds.top + 4,
+        rx: 4
+      }));
+    }
+    appendNoteShape(group, note, x, y);
     refs.noteGrid.appendChild(group);
-  });
+  };
+  state.chart.notes.forEach((note) => appendNote(note));
+  if (state.drag?.kind === "create-hold") appendNote(state.drag.note, " draft");
   refs.notePlayhead.style.top = `${timeToY(state.currentTime)}px`;
   refs.noteScroll.scrollTop = scrollTop;
   if (waveform) renderWaveform();
-  else refs.waveform.style.height = `${height}px`;
+  else syncWaveformGeometry();
   refs.selectedNoteCount.textContent = state.selectedNotes.size;
   $("#batch-note-wpos").disabled = !state.chart.notes.some((note) => note.type === "middle" && state.selectedNotes.has(note.id));
 }
@@ -801,22 +876,52 @@ function createNoteAt(event) {
   const type = noteTypeAtX(x, width);
   const hitTime = snapTime(state.chart, yToTime(y));
   const wPos = type === "middle" ? xToWPos(x, width) : 0;
-  const key = bpmKeyAt(state.chart, hitTime);
-  const step = state.chart.timing.subdivision > 0
-    ? ((60 / key.bpm) * key.beatsPerBar) / state.chart.timing.subdivision
-    : 1;
   const note = {
     id: crypto.randomUUID(),
     type,
     kind: state.noteKind,
     hitTime,
     wPos,
-    ...(state.noteKind === "hold" ? { endTime: Math.min(state.chart.timing.duration, hitTime + Math.max(step, 0.1)) } : {})
+    ...(state.noteKind === "hold" ? { endTime: defaultHoldEndTime(hitTime) } : {})
   };
   commitChange(() => state.chart.notes.push(note), `已放置 ${state.noteKind.toUpperCase()} ${type} 音符`);
   state.selectedEvents.clear();
   state.selectedNotes.clear();
   state.selectedNotes.add(note.id);
+  renderNoteEditor();
+  renderEventTimelines();
+  renderInspector();
+}
+
+function holdDraftFromEvent(event) {
+  const { x, y } = notePointFromEvent(event);
+  const width = refs.noteGrid.viewBox.baseVal.width;
+  const type = noteTypeAtX(x, width);
+  const duration = state.chart.timing.duration;
+  let hitTime = snapTime(state.chart, yToTime(y));
+  if (hitTime >= duration) hitTime = Math.max(0, duration - 0.001);
+  return {
+    id: crypto.randomUUID(),
+    type,
+    kind: "hold",
+    hitTime,
+    endTime: defaultHoldEndTime(hitTime),
+    wPos: type === "middle" ? xToWPos(x, width) : 0
+  };
+}
+
+function startHoldCreation(event) {
+  event.preventDefault();
+  state.selectedEvents.clear();
+  state.selectedNotes.clear();
+  state.drag = {
+    kind: "create-hold",
+    pointerId: event.pointerId,
+    startClientX: event.clientX,
+    startClientY: event.clientY,
+    note: holdDraftFromEvent(event)
+  };
+  refs.noteGrid.setPointerCapture?.(event.pointerId);
   renderNoteEditor();
   renderEventTimelines();
   renderInspector();
@@ -906,6 +1011,28 @@ function notePointerDown(event, element) {
   renderInspector();
 }
 
+function holdTailPointerDown(event, element) {
+  event.preventDefault();
+  event.stopPropagation();
+  const note = state.chart.notes.find((item) => item.id === element.dataset.noteId);
+  if (!note || note.kind !== "hold") return;
+  state.selectedEvents.clear();
+  state.selectedNotes.clear();
+  state.selectedNotes.add(note.id);
+  beginChange();
+  state.drag = {
+    kind: "hold-tail",
+    pointerId: event.pointerId,
+    noteId: note.id,
+    originalEndTime: note.endTime,
+    changed: false
+  };
+  refs.noteGrid.setPointerCapture?.(event.pointerId);
+  renderNoteEditor();
+  renderEventTimelines();
+  renderInspector();
+}
+
 // Vertical event timelines
 function eventToken(timelineId, eventId) {
   return `${timelineId}:${eventId}`;
@@ -934,6 +1061,10 @@ function timelineRange(events) {
 
 function eventX(value, range) {
   return 12 + ((value - range.min) / (range.max - range.min)) * 76;
+}
+
+function eventDragRange(timelineId) {
+  return state.drag?.kind === "event" ? state.drag.metrics?.[timelineId]?.range : null;
 }
 
 function createTimelineCurve(events, range, height, color) {
@@ -1016,7 +1147,7 @@ function renderEventTimelines() {
 
   TIMELINE_DEFINITIONS.forEach((definition) => {
     const events = state.chart.timelines[definition.id];
-    const range = timelineRange(events);
+    const range = eventDragRange(definition.id) ?? timelineRange(events);
     const column = document.createElement("div");
     column.className = "timeline-column";
     column.dataset.timelineId = definition.id;
@@ -1026,11 +1157,15 @@ function renderEventTimelines() {
     column.innerHTML = `<div class="timeline-label"><strong>${definition.label}</strong><span>${range.min.toFixed(2)}…${range.max.toFixed(2)}</span></div>`;
     column.appendChild(createTimelineCurve(events, range, height, definition.color));
     events.forEach((event) => {
+      const token = eventToken(definition.id, event.id);
+      const selected = state.selectedEvents.has(token);
+      const dragging = state.drag?.kind === "event" && selected;
       const key = document.createElement("button");
       key.type = "button";
-      key.className = `event-key${state.selectedEvents.has(eventToken(definition.id, event.id)) ? " selected" : ""}`;
+      key.className = `event-key${selected ? " selected" : ""}`;
       key.style.setProperty("--event-color", definition.color);
-      key.style.left = `${eventX(event.value, range)}%`;
+      const position = eventX(event.value, range);
+      key.style.left = `${dragging ? Math.max(2, Math.min(98, position)) : position}%`;
       key.style.top = `${timeToY(event.time)}px`;
       key.dataset.timelineId = definition.id;
       key.dataset.eventId = event.id;
@@ -1126,6 +1261,7 @@ function addTimelineEvent(event, column) {
 }
 
 function eventPointerDown(event, key) {
+  event.preventDefault();
   event.stopPropagation();
   state.selectedNotes.clear();
   renderNoteEditor();
@@ -1150,9 +1286,64 @@ function eventPointerDown(event, key) {
     const selectedEvent = state.chart.timelines[selectedTimeline].find((item) => item.id === selectedId);
     if (selectedEvent) snapshots.push({ timelineId: selectedTimeline, id: selectedId, time: selectedEvent.time, value: selectedEvent.value });
   });
-  state.drag = { kind: "event", startX: event.clientX, startY: event.clientY, snapshots };
+  const timelineIds = new Set(snapshots.map((snapshot) => snapshot.timelineId));
+  const metrics = Object.fromEntries([...timelineIds].map((selectedTimeline) => {
+    const column = refs.eventTimelines.querySelector(`.timeline-column[data-timeline-id="${selectedTimeline}"]`);
+    return [selectedTimeline, {
+      range: timelineRange(state.chart.timelines[selectedTimeline]),
+      width: Math.max(1, column?.getBoundingClientRect().width ?? 110)
+    }];
+  }));
+  state.drag = {
+    kind: "event",
+    pointerId: event.pointerId,
+    startX: event.clientX,
+    startY: event.clientY,
+    snapshots,
+    metrics,
+    changed: false
+  };
+  refs.eventTimelines.setPointerCapture?.(event.pointerId);
   renderEventTimelines();
   renderInspector();
+}
+
+function eventSelectionRectangle() {
+  let rectangle = document.querySelector(".event-selection-rect");
+  if (!rectangle) {
+    rectangle = document.createElement("div");
+    rectangle.className = "event-selection-rect";
+    document.body.appendChild(rectangle);
+  }
+  return rectangle;
+}
+
+function updateEventMarqueeSelection(drag) {
+  const left = Math.min(drag.startX, drag.currentX);
+  const right = Math.max(drag.startX, drag.currentX);
+  const top = Math.min(drag.startY, drag.currentY);
+  const bottom = Math.max(drag.startY, drag.currentY);
+  state.selectedEvents = new Set(drag.additive ? drag.baseSelection : []);
+
+  refs.eventTimelines.querySelectorAll(".event-key").forEach((key) => {
+    const bounds = key.getBoundingClientRect();
+    const intersects = bounds.right >= left && bounds.left <= right
+      && bounds.bottom >= top && bounds.top <= bottom;
+    const token = eventToken(key.dataset.timelineId, key.dataset.eventId);
+    if (intersects) state.selectedEvents.add(token);
+    key.classList.toggle("selected", state.selectedEvents.has(token));
+  });
+
+  const rectangle = eventSelectionRectangle();
+  rectangle.style.left = `${left}px`;
+  rectangle.style.top = `${top}px`;
+  rectangle.style.width = `${right - left}px`;
+  rectangle.style.height = `${bottom - top}px`;
+  refs.selectedEventCount.textContent = state.selectedEvents.size;
+}
+
+function removeEventSelectionRectangle() {
+  document.querySelector(".event-selection-rect")?.remove();
 }
 
 function handlePointerMove(event) {
@@ -1171,6 +1362,36 @@ function handlePointerMove(event) {
     updateMarqueeSelection(state.drag);
     return;
   }
+  if (state.drag.kind === "event-marquee") {
+    const distance = Math.hypot(event.clientX - state.drag.startX, event.clientY - state.drag.startY);
+    if (!state.drag.active && distance < 4) return;
+    if (!state.drag.active) {
+      state.drag.active = true;
+      state.drag.captured = true;
+      refs.eventTimelines.setPointerCapture?.(state.drag.pointerId);
+    }
+    state.drag.currentX = event.clientX;
+    state.drag.currentY = event.clientY;
+    updateEventMarqueeSelection(state.drag);
+    return;
+  }
+  if (state.drag.kind === "create-hold") {
+    const point = notePointFromEvent(event);
+    state.drag.note.endTime = holdEndTimeAtY(state.drag.note, point.y);
+    renderNoteEditor({ waveform: false });
+    return;
+  }
+  if (state.drag.kind === "hold-tail") {
+    const note = state.chart.notes.find((item) => item.id === state.drag.noteId);
+    if (!note) return;
+    const point = notePointFromEvent(event);
+    const endTime = holdEndTimeAtY(note, point.y);
+    state.drag.changed ||= Math.abs(endTime - state.drag.originalEndTime) > 0.0001;
+    note.endTime = endTime;
+    renderNoteEditor({ waveform: false });
+    renderInspector();
+    return;
+  }
   if (state.drag.kind === "note") {
     const deltaTime = -(event.clientY - state.drag.startY) / state.pixelsPerSecond;
     const deltaWPos = ((event.clientX - state.drag.startX) / Math.max(1, refs.noteGrid.clientWidth))
@@ -1187,13 +1408,15 @@ function handlePointerMove(event) {
     renderNoteEditor();
   } else if (state.drag.kind === "event") {
     const deltaTime = -(event.clientY - state.drag.startY) / state.pixelsPerSecond;
+    const deltaX = event.clientX - state.drag.startX;
+    state.drag.changed ||= Math.hypot(deltaX, event.clientY - state.drag.startY) >= 1;
     state.drag.snapshots.forEach((snapshot) => {
       const timelineEvent = state.chart.timelines[snapshot.timelineId].find((item) => item.id === snapshot.id);
       if (!timelineEvent) return;
-      const events = state.chart.timelines[snapshot.timelineId];
-      const range = timelineRange(events);
+      const metric = state.drag.metrics[snapshot.timelineId];
+      const valueSpan = metric.range.max - metric.range.min;
       timelineEvent.time = snapTime(state.chart, snapshot.time + deltaTime);
-      timelineEvent.value = snapshot.value + ((event.clientX - state.drag.startX) / 110) * (range.max - range.min);
+      timelineEvent.value = snapshot.value + (deltaX / (metric.width * 0.76)) * valueSpan;
     });
     renderEventTimelines();
   }
@@ -1215,6 +1438,37 @@ function handlePointerUp(event) {
     setStatus(`已擦除 ${erasedCount} 个音符`);
     return;
   }
+  if (state.drag.kind === "create-hold") {
+    const note = state.drag.note;
+    refs.noteGrid.releasePointerCapture?.(state.drag.pointerId);
+    state.drag = null;
+    commitChange(() => {
+      state.chart.notes.push(note);
+      state.selectedEvents.clear();
+      state.selectedNotes.clear();
+      state.selectedNotes.add(note.id);
+    }, `已放置 HOLD ${note.type} 音符`);
+    return;
+  }
+  if (state.drag.kind === "hold-tail") {
+    const drag = state.drag;
+    refs.noteGrid.releasePointerCapture?.(drag.pointerId);
+    state.drag = null;
+    if (!drag.changed) {
+      state.undo.pop();
+      renderNoteEditor();
+      renderInspector();
+      return;
+    }
+    state.chart = normalizeChart(state.chart);
+    setDirty(true);
+    renderNoteEditor();
+    renderInspector();
+    rebuildPreviewNotes();
+    syncGamePreviewChart();
+    setStatus("已调整 Hold 尾部");
+    return;
+  }
   if (state.drag.kind === "marquee") {
     const drag = state.drag;
     state.drag = null;
@@ -1227,8 +1481,37 @@ function handlePointerUp(event) {
     }
     return;
   }
-  const wasEvent = state.drag.kind === "event";
+  if (state.drag.kind === "event-marquee") {
+    const drag = state.drag;
+    if (drag.captured) refs.eventTimelines.releasePointerCapture?.(drag.pointerId);
+    state.drag = null;
+    removeEventSelectionRectangle();
+    if (!drag.active) {
+      if (!drag.additive) {
+        state.selectedEvents.clear();
+        refs.eventTimelines.querySelectorAll(".event-key.selected")
+          .forEach((key) => key.classList.remove("selected"));
+        refs.selectedEventCount.textContent = "0";
+      }
+      renderInspector();
+      setStatus("已清除事件选择");
+      return;
+    }
+    renderEventTimelines();
+    renderInspector();
+    setStatus(`已框选 ${state.selectedEvents.size} 个事件`);
+    return;
+  }
+  const drag = state.drag;
+  const wasEvent = drag.kind === "event";
+  if (wasEvent) refs.eventTimelines.releasePointerCapture?.(drag.pointerId);
   state.drag = null;
+  if (wasEvent && !drag.changed) {
+    state.undo.pop();
+    renderEventTimelines();
+    renderInspector();
+    return;
+  }
   state.chart = normalizeChart(state.chart);
   setDirty(true);
   if (wasEvent) rebuildTrajectory();
@@ -1252,6 +1535,99 @@ function selectedEvent() {
   const [timelineId, id] = token.split(":");
   const event = state.chart.timelines[timelineId]?.find((item) => item.id === id);
   return event ? { timelineId, event } : null;
+}
+
+function copySelection() {
+  const notes = state.chart.notes.filter((note) => state.selectedNotes.has(note.id));
+  if (notes.length) {
+    state.clipboard = {
+      kind: "notes",
+      anchorTime: Math.min(...notes.map((note) => note.hitTime)),
+      items: structuredClone(notes)
+    };
+    setStatus(`已复制 ${notes.length} 个音符`);
+    return;
+  }
+
+  const events = [];
+  state.selectedEvents.forEach((token) => {
+    const [timelineId, id] = token.split(":");
+    const timelineEvent = state.chart.timelines[timelineId]?.find((item) => item.id === id);
+    if (timelineEvent) events.push({ timelineId, event: structuredClone(timelineEvent) });
+  });
+  if (events.length) {
+    state.clipboard = {
+      kind: "events",
+      anchorTime: Math.min(...events.map((item) => item.event.time)),
+      items: events
+    };
+    setStatus(`已复制 ${events.length} 个事件`);
+    return;
+  }
+
+  setStatus("请先选择要复制的音符或事件");
+}
+
+function clipboardTimeDelta(anchorTime, endTime) {
+  const duration = state.chart.timing.duration;
+  let delta = snapTime(state.chart, state.currentTime) - anchorTime;
+  if (anchorTime + delta < 0) delta = -anchorTime;
+  if (endTime + delta > duration) delta -= endTime + delta - duration;
+  return delta;
+}
+
+function pasteNotes(clipboard) {
+  const endTime = Math.max(...clipboard.items.map((note) => note.kind === "hold" ? note.endTime : note.hitTime));
+  const delta = clipboardTimeDelta(clipboard.anchorTime, endTime);
+  const pasted = clipboard.items.map((source) => {
+    const hitTime = Math.max(0, Math.min(state.chart.timing.duration, source.hitTime + delta));
+    const note = {
+      ...structuredClone(source),
+      id: crypto.randomUUID(),
+      hitTime
+    };
+    if (note.kind === "hold") {
+      note.endTime = Math.max(
+        hitTime + 0.001,
+        Math.min(state.chart.timing.duration, source.endTime + delta)
+      );
+    }
+    return note;
+  });
+
+  commitChange(() => {
+    state.chart.notes.push(...pasted);
+    state.selectedEvents.clear();
+    state.selectedNotes = new Set(pasted.map((note) => note.id));
+  }, `已粘贴 ${pasted.length} 个音符`);
+}
+
+function pasteEvents(clipboard) {
+  const endTime = Math.max(...clipboard.items.map((item) => item.event.time));
+  const delta = clipboardTimeDelta(clipboard.anchorTime, endTime);
+  const pasted = clipboard.items.map(({ timelineId, event }) => ({
+    timelineId,
+    event: {
+      ...structuredClone(event),
+      id: crypto.randomUUID(),
+      time: Math.max(0, Math.min(state.chart.timing.duration, event.time + delta))
+    }
+  }));
+
+  commitChange(() => {
+    pasted.forEach(({ timelineId, event }) => state.chart.timelines[timelineId].push(event));
+    state.selectedNotes.clear();
+    state.selectedEvents = new Set(pasted.map(({ timelineId, event }) => eventToken(timelineId, event.id)));
+  }, `已粘贴 ${pasted.length} 个事件`, { trajectory: true });
+}
+
+function pasteClipboard() {
+  if (!state.clipboard?.items?.length) {
+    setStatus("剪贴板中没有音符或事件");
+    return;
+  }
+  if (state.clipboard.kind === "notes") pasteNotes(state.clipboard);
+  else if (state.clipboard.kind === "events") pasteEvents(state.clipboard);
 }
 
 function renderInspector() {
@@ -1325,6 +1701,7 @@ function syncChartControls() {
   refs.wPosDivision.value = state.chart.timing.wPosDivision;
   refs.durationTime.textContent = formatTime(state.chart.timing.duration);
   renderBpmKeys();
+  renderDifficultyManager();
 }
 
 function rebuildEverything() {
@@ -1471,13 +1848,26 @@ async function analyzeDominantPitch(channel, sampleRate, duration) {
   return result;
 }
 
-async function loadAudio(file) {
+async function snapshotSourceFile(file) {
+  const bytes = await file.arrayBuffer();
+  return {
+    bytes,
+    file: new File([bytes], file.name, {
+      type: file.type || fileMimeType(file.name),
+      lastModified: file.lastModified || Date.now()
+    })
+  };
+}
+
+async function loadAudio(file, { updateChart = true } = {}) {
   if (!file) return;
+  const source = await snapshotSourceFile(file);
   if (state.audioUrl) URL.revokeObjectURL(state.audioUrl);
-  state.audioUrl = URL.createObjectURL(file);
+  state.audioSourceFile = source.file;
+  state.audioUrl = URL.createObjectURL(source.file);
   refs.audio.src = state.audioUrl;
   const context = new AudioContext();
-  const buffer = await context.decodeAudioData(await file.arrayBuffer());
+  const buffer = await context.decodeAudioData(source.bytes.slice(0));
   const channel = buffer.getChannelData(0);
   const bins = Math.min(
     channel.length,
@@ -1498,15 +1888,33 @@ async function loadAudio(file) {
   setStatus("正在分析波形主导音高…");
   state.waveformPitch = await analyzeDominantPitch(channel, buffer.sampleRate, buffer.duration);
   await context.close();
-  commitChange(() => {
-    state.chart.meta.audioFile = file.name;
-    state.chart.timing.duration = buffer.duration;
-  }, `已加载音乐 ${file.name}`, { trajectory: true });
+  if (updateChart) {
+    commitChange(() => {
+      state.chart.meta.audioFile = file.name;
+      state.chart.timing.duration = buffer.duration;
+    }, `已加载音乐 ${file.name}`, { trajectory: true });
+  } else {
+    state.chart.meta.audioFile ||= file.name;
+    renderNoteEditor();
+    setStatus(`已加载音乐 ${file.name}`);
+  }
   syncChartControls();
 }
 
+async function loadJacket(file, { updateChart = true } = {}) {
+  if (!file) return;
+  const source = await snapshotSourceFile(file);
+  if (state.jacketUrl) URL.revokeObjectURL(state.jacketUrl);
+  state.jacketSourceFile = source.file;
+  state.jacketUrl = URL.createObjectURL(source.file);
+  state.chart.meta.jacket = file.name;
+  if (updateChart) setDirty(true);
+  syncGamePreviewChart();
+  setStatus(`已加载曲绘 ${file.name}`);
+}
+
 // Persistence
-function saveChart() {
+function syncMetaFromControls() {
   const metaDefaults = CONFIG.chart.defaults.meta;
   state.chart.meta.title = refs.title.value.trim() || metaDefaults.title;
   state.chart.meta.composer = refs.composer.value.trim() || metaDefaults.composer;
@@ -1514,29 +1922,433 @@ function saveChart() {
   state.chart.meta.illustrator = refs.illustrator.value.trim() || metaDefaults.illustrator;
   state.chart.meta.difficultyLabel = refs.difficultyLabel.value.trim() || metaDefaults.difficultyLabel;
   state.chart.meta.level = Math.max(0, Math.round(Number(refs.level.value) || 0));
+  updateCurrentDifficultyEntry();
+}
+
+function safeFileName(value, fallback) {
+  const safe = String(value ?? "").trim().replace(/[<>:"/\\|?*\x00-\x1f]/g, "_");
+  return safe || fallback;
+}
+
+function chartFileName() {
+  if (state.projectChartFile) return state.projectChartFile;
+  const label = safeFileName(state.chart.meta.difficultyLabel.toLowerCase(), `chart-${state.chart.meta.level}`);
+  return `${label}.json`;
+}
+
+function uniqueChartFileName(label, level) {
+  const base = safeFileName(String(label).toLowerCase(), `chart-${level}`);
+  const used = new Set([
+    ...state.projectCharts.keys(),
+    ...(state.projectMeta?.charts ?? []).map((entry) => entry.file)
+  ]);
+  let name = `${base}.json`;
+  for (let suffix = 2; used.has(name); suffix += 1) name = `${base}-${suffix}.json`;
+  return name;
+}
+
+function difficultyEntry(file, chart) {
+  return {
+    file,
+    difficultyLabel: chart.meta.difficultyLabel,
+    level: chart.meta.level,
+    charter: chart.meta.charter
+  };
+}
+
+function renderDifficultyManager() {
+  const entries = state.projectMeta?.charts?.length
+    ? state.projectMeta.charts
+    : [difficultyEntry(state.projectChartFile ?? "", state.chart)];
+  refs.difficultySelect.replaceChildren(...entries.map((entry) => {
+    const option = document.createElement("option");
+    option.value = entry.file;
+    option.textContent = `${entry.difficultyLabel} ${entry.level}`;
+    return option;
+  }));
+  refs.difficultySelect.value = state.projectChartFile ?? entries[0]?.file ?? "";
+  $("#remove-difficulty").disabled = entries.length <= 1;
+}
+
+function updateCurrentDifficultyEntry() {
+  if (!state.projectChartFile || !state.projectMeta) {
+    renderDifficultyManager();
+    return;
+  }
+  const entry = difficultyEntry(state.projectChartFile, state.chart);
+  const index = state.projectMeta.charts.findIndex((item) => item.file === state.projectChartFile);
+  if (index >= 0) state.projectMeta.charts[index] = entry;
+  else state.projectMeta.charts.push(entry);
+  renderDifficultyManager();
+}
+
+function ensureCurrentDifficultyRegistered() {
+  if (!state.projectChartFile) {
+    state.projectChartFile = uniqueChartFileName(state.chart.meta.difficultyLabel, state.chart.meta.level);
+  }
+  state.projectMeta ??= { format: "particlesoar-song@1", charts: [] };
+  state.projectMeta.charts ??= [];
+  updateCurrentDifficultyEntry();
+}
+
+function cacheCurrentDifficulty() {
+  syncMetaFromControls();
+  ensureCurrentDifficultyRegistered();
+  state.projectCharts.set(state.projectChartFile, structuredClone(state.chart));
+}
+
+function activateDifficulty(file, message, preserveDirty = state.dirty) {
+  const chart = state.projectCharts.get(file);
+  if (!chart) return;
+  state.projectChartFile = file;
+  state.chart = normalizeChart(structuredClone(chart));
+  state.currentTime = 0;
+  state.selectedNotes.clear();
+  state.selectedEvents.clear();
+  state.undo.length = 0;
+  state.redo.length = 0;
+  syncChartControls();
+  rebuildEverything();
+  setDirty(preserveDirty);
+  renderDifficultyManager();
+  if (message) setStatus(message);
+}
+
+function blankDifficultyChart() {
+  const current = state.chart;
+  const blank = normalizeChart(createDefaultChart());
+  blank.meta = {
+    ...blank.meta,
+    title: current.meta.title,
+    composer: current.meta.composer,
+    illustrator: current.meta.illustrator,
+    audioFile: current.meta.audioFile,
+    jacket: current.meta.jacket
+  };
+  blank.timing.duration = current.timing.duration;
+  blank.timing.offset = current.timing.offset;
+  blank.timing.subdivision = current.timing.subdivision;
+  blank.timing.wPosDivision = current.timing.wPosDivision;
+  blank.timing.bpmKeys = structuredClone(current.timing.bpmKeys);
+  blank.playfield = structuredClone(current.playfield);
+  blank.notes = [];
+  blank.effects = [];
+  return normalizeChart(blank);
+}
+
+function exportChartJson() {
+  syncMetaFromControls();
   const blob = new Blob([JSON.stringify(compactChart(state.chart))], { type: "application/json" });
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement("a");
   anchor.href = url;
-  anchor.download = `${state.chart.meta.title.replace(/[^\w\-]+/g, "_") || "chart"}.json`;
+  anchor.download = chartFileName();
   anchor.click();
   URL.revokeObjectURL(url);
   setDirty(false);
-  setStatus("谱面已保存");
+  setStatus("已导出单谱面 JSON");
 }
 
-async function loadChartFile(file) {
-  if (!file) return;
-  const chart = normalizeChart(JSON.parse(await file.text()));
+function hasProjectDirectoryApi() {
+  return "showDirectoryPicker" in window;
+}
+
+async function writableProjectDirectory() {
+  if (!state.projectDirectory) {
+    state.projectDirectory = await window.showDirectoryPicker({
+      id: "particlesoar-chart-project",
+      mode: "readwrite"
+    });
+  }
+  if (state.projectDirectory.requestPermission) {
+    const permission = await state.projectDirectory.requestPermission({ mode: "readwrite" });
+    if (permission !== "granted") throw new DOMException("工程文件夹没有写入权限", "NotAllowedError");
+  }
+  refs.projectLocation.textContent = state.projectDirectory.name;
+  return state.projectDirectory;
+}
+
+async function readProjectJson(directory, name) {
+  const handle = await directory.getFileHandle(name);
+  return JSON.parse(await (await handle.getFile()).text());
+}
+
+async function writeProjectFile(directory, name, contents) {
+  const handle = await directory.getFileHandle(safeFileName(name, "file"), { create: true });
+  const writable = await handle.createWritable();
+  await writable.write(contents);
+  await writable.close();
+}
+
+async function materializeProjectEntries(entries) {
+  return Promise.all(entries.map(async (entry) => ({
+    name: entry.name,
+    contents: typeof entry.contents === "string" || entry.contents instanceof ArrayBuffer
+      ? entry.contents
+      : ArrayBuffer.isView(entry.contents)
+        ? entry.contents.buffer.slice(entry.contents.byteOffset, entry.contents.byteOffset + entry.contents.byteLength)
+        : await entry.contents.arrayBuffer()
+  })));
+}
+
+function rebuildProjectMeta() {
+  const previousOrder = (state.projectMeta?.charts ?? []).map((entry) => entry.file);
+  const files = [
+    ...previousOrder.filter((file) => state.projectCharts.has(file)),
+    ...[...state.projectCharts.keys()].filter((file) => !previousOrder.includes(file))
+  ];
+  return {
+    format: "particlesoar-song@1",
+    title: state.chart.meta.title,
+    composer: state.chart.meta.composer,
+    illustrator: state.chart.meta.illustrator,
+    ...(state.chart.meta.audioFile ? { audio: state.chart.meta.audioFile } : {}),
+    ...(state.chart.meta.jacket ? { jacket: state.chart.meta.jacket } : {}),
+    charts: files.map((file) => difficultyEntry(file, state.projectCharts.get(file)))
+  };
+}
+
+async function collectProjectEntries() {
+  cacheCurrentDifficulty();
+  if (state.audioSourceFile) {
+    state.chart.meta.audioFile = safeFileName(state.chart.meta.audioFile || state.audioSourceFile.name, "audio.ogg");
+  }
+  if (state.jacketSourceFile) {
+    state.chart.meta.jacket = safeFileName(state.chart.meta.jacket || state.jacketSourceFile.name, "jacket.webp");
+  }
+  for (const [file, chart] of state.projectCharts) {
+    chart.meta.title = state.chart.meta.title;
+    chart.meta.composer = state.chart.meta.composer;
+    chart.meta.illustrator = state.chart.meta.illustrator;
+    if (state.chart.meta.audioFile) chart.meta.audioFile = state.chart.meta.audioFile;
+    else delete chart.meta.audioFile;
+    if (state.chart.meta.jacket) chart.meta.jacket = state.chart.meta.jacket;
+    else delete chart.meta.jacket;
+    state.projectCharts.set(file, chart);
+  }
+  state.projectMeta = rebuildProjectMeta();
+  renderDifficultyManager();
+  return [
+    { name: "meta.json", contents: JSON.stringify(state.projectMeta, null, 2) },
+    ...[...state.projectCharts].map(([name, chart]) => ({ name, contents: JSON.stringify(compactChart(chart)) })),
+    ...(state.audioSourceFile ? [{ name: state.chart.meta.audioFile, contents: state.audioSourceFile }] : []),
+    ...(state.jacketSourceFile ? [{ name: state.chart.meta.jacket, contents: state.jacketSourceFile }] : [])
+  ];
+}
+
+function downloadBlob(blob, name) {
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = name;
+  anchor.click();
+  setTimeout(() => URL.revokeObjectURL(url), 0);
+}
+
+async function saveProject() {
+  try {
+    const entries = await collectProjectEntries();
+    if (hasProjectDirectoryApi()) {
+      const directory = await writableProjectDirectory();
+      // Resolve every source before replacing any destination file. In particular,
+      // an opened project's audio and jacket may have originated in this directory.
+      const materializedEntries = await materializeProjectEntries(entries);
+      for (const entry of materializedEntries) await writeProjectFile(directory, entry.name, entry.contents);
+      refs.projectLocation.textContent = directory.name;
+      setStatus(`工程已保存：${directory.name}/${state.projectChartFile}`);
+    } else {
+      const archive = await createProjectZip(entries);
+      const name = `${safeFileName(state.chart.meta.title, "ParticleSoar-song")}.zip`;
+      downloadBlob(archive, name);
+      refs.projectLocation.textContent = `${name} · PACKAGE`;
+      setStatus(`工程包已保存：${name}`);
+    }
+    setDirty(false);
+  } catch (error) {
+    if (error?.name === "AbortError") setStatus("已取消选择工程文件夹");
+    else setStatus(`工程保存失败：${error.message}`);
+  }
+}
+
+function clearProjectResources() {
+  if (state.audioUrl) URL.revokeObjectURL(state.audioUrl);
+  if (state.jacketUrl) URL.revokeObjectURL(state.jacketUrl);
+  state.audioUrl = null;
+  state.jacketUrl = null;
+  state.audioSourceFile = null;
+  state.jacketSourceFile = null;
+  state.waveformPeaks = null;
+  state.waveformPitch = null;
+  refs.audio.pause();
+  refs.audio.removeAttribute("src");
+  refs.audio.load();
+}
+
+function clearProjectContext() {
+  state.projectDirectory = null;
+  state.projectMeta = null;
+  state.projectChartFile = null;
+  state.projectCharts = new Map();
+  refs.projectLocation.textContent = "NO PROJECT";
+  clearProjectResources();
+}
+
+async function applyLoadedChart(chart, label) {
   state.undo.push(snapshot());
-  state.chart = chart;
+  state.chart = normalizeChart(chart);
   state.selectedNotes.clear();
   state.selectedEvents.clear();
   state.currentTime = 0;
   syncChartControls();
   rebuildEverything();
   setDirty(false);
-  setStatus(`已加载 ${file.name}`);
+  setStatus(`已加载 ${label}`);
+}
+
+async function openProject() {
+  if (!hasProjectDirectoryApi()) {
+    refs.projectPackage.click();
+    return;
+  }
+  try {
+    const directory = await window.showDirectoryPicker({
+      id: "particlesoar-chart-project",
+      mode: "readwrite"
+    });
+    const meta = await readProjectJson(directory, "meta.json");
+    const charts = Array.isArray(meta.charts) ? meta.charts : [];
+    if (!charts.length) throw new Error("meta.json 中没有难度谱面");
+    const entry = charts.find((item) => item.difficultyLabel === state.chart.meta.difficultyLabel) ?? charts[0];
+    const loadedCharts = new Map();
+    for (const chartEntry of charts) {
+      loadedCharts.set(chartEntry.file, normalizeChart(await readProjectJson(directory, chartEntry.file)));
+    }
+    clearProjectResources();
+    state.projectDirectory = directory;
+    state.projectMeta = meta;
+    state.projectCharts = loadedCharts;
+    refs.projectLocation.textContent = directory.name;
+    activateDifficulty(entry.file, null, false);
+    if (meta.audio) {
+      const audio = await (await directory.getFileHandle(meta.audio)).getFile();
+      await loadAudio(audio, { updateChart: false });
+    }
+    if (meta.jacket) {
+      const jacket = await (await directory.getFileHandle(meta.jacket)).getFile();
+      await loadJacket(jacket, { updateChart: false });
+    }
+    setDirty(false);
+    setStatus(`工程已打开：${directory.name}/${entry.file}`);
+  } catch (error) {
+    if (error?.name === "AbortError") setStatus("已取消打开工程");
+    else setStatus(`工程打开失败：${error.message}`);
+  }
+}
+
+function fileMimeType(name) {
+  const extension = name.split(".").pop()?.toLowerCase();
+  return ({
+    mp3: "audio/mpeg",
+    ogg: "audio/ogg",
+    wav: "audio/wav",
+    flac: "audio/flac",
+    png: "image/png",
+    jpg: "image/jpeg",
+    jpeg: "image/jpeg",
+    webp: "image/webp"
+  })[extension] ?? "application/octet-stream";
+}
+
+async function loadProjectPackage(file) {
+  if (!file) return;
+  try {
+    const files = await readProjectZip(file);
+    const meta = projectJson(files, "meta.json");
+    const charts = Array.isArray(meta.charts) ? meta.charts : [];
+    if (!charts.length) throw new Error("meta.json 中没有难度谱面");
+    const entry = charts.find((item) => item.difficultyLabel === state.chart.meta.difficultyLabel) ?? charts[0];
+    const loadedCharts = new Map(charts.map((chartEntry) => [chartEntry.file, normalizeChart(projectJson(files, chartEntry.file))]));
+    clearProjectContext();
+    state.projectMeta = meta;
+    state.projectCharts = loadedCharts;
+    refs.projectLocation.textContent = `${file.name} · PACKAGE`;
+    activateDifficulty(entry.file, null, false);
+    if (meta.audio && files.has(meta.audio)) {
+      await loadAudio(new File([files.get(meta.audio)], meta.audio, { type: fileMimeType(meta.audio) }), { updateChart: false });
+    }
+    if (meta.jacket && files.has(meta.jacket)) {
+      await loadJacket(new File([files.get(meta.jacket)], meta.jacket, { type: fileMimeType(meta.jacket) }), { updateChart: false });
+    }
+    setDirty(false);
+    setStatus(`工程包已打开：${file.name}/${entry.file}`);
+  } catch (error) {
+    setStatus(`工程包打开失败：${error.message}`);
+  } finally {
+    refs.projectPackage.value = "";
+  }
+}
+
+async function loadChartFile(file) {
+  if (!file) return;
+  clearProjectContext();
+  await applyLoadedChart(JSON.parse(await file.text()), file.name);
+}
+
+function nextDifficultyLabel() {
+  const used = new Set((state.projectMeta?.charts ?? []).map((entry) => entry.difficultyLabel.toUpperCase()));
+  return ["EZ", "HD", "HS", "IN", "AT"].find((label) => !used.has(label)) ?? "NEW";
+}
+
+function openDifficultyDialog() {
+  cacheCurrentDifficulty();
+  refs.newDifficultyLabel.value = nextDifficultyLabel();
+  refs.newDifficultyLevel.value = state.chart.meta.level;
+  refs.newDifficultyCharter.value = state.chart.meta.charter;
+  refs.difficultyForm.querySelector("input[name='difficulty-source'][value='blank']").checked = true;
+  refs.difficultyDialog.showModal();
+  refs.newDifficultyLabel.select();
+}
+
+function createDifficultyFromDialog() {
+  const label = refs.newDifficultyLabel.value.trim().replace(/^-+|-+$/g, "");
+  const level = Math.max(0, Math.round(Number(refs.newDifficultyLevel.value) || 0));
+  const charter = refs.newDifficultyCharter.value.trim() || CONFIG.chart.defaults.meta.charter;
+  if (!label) {
+    setStatus("难度标识不能为空");
+    return false;
+  }
+  const duplicate = (state.projectMeta?.charts ?? []).some((entry) =>
+    entry.difficultyLabel.toLowerCase() === label.toLowerCase()
+  );
+  if (duplicate) {
+    setStatus(`难度 ${label} 已存在`);
+    return false;
+  }
+  cacheCurrentDifficulty();
+  const source = refs.difficultyForm.querySelector("input[name='difficulty-source']:checked")?.value;
+  const chart = source === "copy" ? normalizeChart(structuredClone(state.chart)) : blankDifficultyChart();
+  chart.meta.difficultyLabel = label;
+  chart.meta.level = level;
+  chart.meta.charter = charter;
+  const file = uniqueChartFileName(label, level);
+  state.projectCharts.set(file, chart);
+  state.projectMeta.charts.push(difficultyEntry(file, chart));
+  activateDifficulty(file, `已创建难度 ${label} ${level}`, true);
+  setDirty(true);
+  return true;
+}
+
+function removeCurrentDifficulty() {
+  const entries = state.projectMeta?.charts ?? [];
+  if (entries.length <= 1 || !state.projectChartFile) return;
+  const currentIndex = entries.findIndex((entry) => entry.file === state.projectChartFile);
+  const current = entries[currentIndex];
+  if (!window.confirm(`从工程中移除难度 ${current.difficultyLabel} ${current.level}？\n磁盘上的旧 JSON 不会立即删除。`)) return;
+  state.projectCharts.delete(current.file);
+  entries.splice(currentIndex, 1);
+  const next = entries[Math.min(currentIndex, entries.length - 1)];
+  activateDifficulty(next.file, `已从工程移除难度 ${current.difficultyLabel}`, true);
+  setDirty(true);
 }
 
 // Commands and inputs
@@ -1555,7 +2367,11 @@ refs.noteGrid.addEventListener("pointerdown", (event) => {
   }
   if (event.button !== 0) return;
   const noteElement = event.target.closest(".note-object");
-  if (noteElement) notePointerDown(event, noteElement);
+  if (noteElement) {
+    if (event.target.closest(".hold-tail-handle")) holdTailPointerDown(event, noteElement);
+    else notePointerDown(event, noteElement);
+  }
+  else if (state.noteKind === "hold" && !event.shiftKey) startHoldCreation(event);
   else {
     event.preventDefault();
     state.selectedEvents.clear();
@@ -1584,8 +2400,26 @@ refs.eventTimelines.addEventListener("dblclick", (event) => {
 });
 
 refs.eventTimelines.addEventListener("pointerdown", (event) => {
+  if (event.button !== 0) return;
   const key = event.target.closest(".event-key");
-  if (key) eventPointerDown(event, key);
+  if (key) {
+    eventPointerDown(event, key);
+    return;
+  }
+  state.selectedNotes.clear();
+  renderNoteEditor();
+  state.drag = {
+    kind: "event-marquee",
+    pointerId: event.pointerId,
+    startX: event.clientX,
+    startY: event.clientY,
+    currentX: event.clientX,
+    currentY: event.clientY,
+    additive: event.shiftKey,
+    baseSelection: new Set(state.selectedEvents),
+    active: false,
+    captured: false
+  };
 });
 
 window.addEventListener("pointermove", handlePointerMove);
@@ -1631,6 +2465,9 @@ $("#delete-selection").addEventListener("click", () => {
   }, "已删除所选音符");
 });
 
+$("#copy-selection").addEventListener("click", copySelection);
+$("#paste-selection").addEventListener("click", pasteClipboard);
+
 $("#apply-note-batch").addEventListener("click", () => {
   const deltaTime = Number($("#batch-note-time").value) || 0;
   const deltaWPos = Number($("#batch-note-wpos").value) || 0;
@@ -1645,6 +2482,7 @@ $("#apply-note-batch").addEventListener("click", () => {
 });
 
 $("#apply-event-batch").addEventListener("click", () => {
+  if (!state.selectedEvents.size) return;
   const deltaTime = Number($("#batch-event-time").value) || 0;
   const scale = Number($("#batch-event-scale").value) || 1;
   commitChange(() => {
@@ -1657,6 +2495,21 @@ $("#apply-event-batch").addEventListener("click", () => {
     });
   }, "已批量修改事件", { trajectory: true });
 });
+
+function deleteSelectedEvents() {
+  if (!state.selectedEvents.size) return;
+  const selected = new Set(state.selectedEvents);
+  commitChange(() => {
+    selected.forEach((token) => {
+      const [timelineId, id] = token.split(":");
+      state.chart.timelines[timelineId] = state.chart.timelines[timelineId]
+        .filter((item) => item.id !== id);
+    });
+    state.selectedEvents.clear();
+  }, `已删除 ${selected.size} 个事件`, { trajectory: true });
+}
+
+$("#delete-event-selection").addEventListener("click", deleteSelectedEvents);
 
 refs.noteInspector.addEventListener("submit", (event) => event.preventDefault());
 refs.eventInspector.addEventListener("submit", (event) => event.preventDefault());
@@ -1882,22 +2735,55 @@ noteZoom.addEventListener("change", () => renderZoomPreview(true));
 
 refs.title.addEventListener("change", () => { state.chart.meta.title = refs.title.value; setDirty(true); });
 refs.composer.addEventListener("change", () => { state.chart.meta.composer = refs.composer.value; setDirty(true); });
-refs.charter.addEventListener("change", () => { state.chart.meta.charter = refs.charter.value; setDirty(true); });
+refs.charter.addEventListener("change", () => {
+  state.chart.meta.charter = refs.charter.value;
+  updateCurrentDifficultyEntry();
+  setDirty(true);
+});
 refs.illustrator.addEventListener("change", () => { state.chart.meta.illustrator = refs.illustrator.value; setDirty(true); });
 refs.difficultyLabel.addEventListener("change", () => {
-  state.chart.meta.difficultyLabel = refs.difficultyLabel.value.replace(/^-+|-+$/g, "")
+  const previous = state.chart.meta.difficultyLabel;
+  const next = refs.difficultyLabel.value.replace(/^-+|-+$/g, "")
     || CONFIG.chart.defaults.meta.difficultyLabel;
+  const duplicate = (state.projectMeta?.charts ?? []).some((entry) =>
+    entry.file !== state.projectChartFile && entry.difficultyLabel.toLowerCase() === next.toLowerCase()
+  );
+  if (duplicate) {
+    refs.difficultyLabel.value = previous;
+    setStatus(`难度 ${next} 已存在`);
+    return;
+  }
+  state.chart.meta.difficultyLabel = next;
   refs.difficultyLabel.value = state.chart.meta.difficultyLabel;
+  updateCurrentDifficultyEntry();
   setDirty(true);
 });
 refs.level.addEventListener("change", () => {
   state.chart.meta.level = Math.max(0, Math.round(Number(refs.level.value) || 0));
   refs.level.value = state.chart.meta.level;
+  updateCurrentDifficultyEntry();
   setDirty(true);
+});
+
+refs.difficultySelect.addEventListener("change", () => {
+  const file = refs.difficultySelect.value;
+  if (!file || file === state.projectChartFile) return;
+  const preserveDirty = state.dirty;
+  cacheCurrentDifficulty();
+  activateDifficulty(file, `已切换到 ${state.projectCharts.get(file).meta.difficultyLabel}`, preserveDirty);
+});
+
+$("#add-difficulty").addEventListener("click", openDifficultyDialog);
+$("#remove-difficulty").addEventListener("click", removeCurrentDifficulty);
+refs.difficultyForm.addEventListener("submit", (event) => {
+  if (event.submitter?.value === "cancel") return;
+  event.preventDefault();
+  if (createDifficultyFromDialog()) refs.difficultyDialog.close();
 });
 
 $("#new-chart").addEventListener("click", () => {
   state.undo.push(snapshot());
+  clearProjectContext();
   state.chart = normalizeChart(createDefaultChart());
   state.currentTime = 0;
   state.selectedNotes.clear();
@@ -1907,13 +2793,18 @@ $("#new-chart").addEventListener("click", () => {
   setDirty(true);
   setStatus("已新建谱面");
 });
+$("#open-project").addEventListener("click", openProject);
+$("#save-project").addEventListener("click", saveProject);
 $("#load-chart").addEventListener("click", () => refs.chartFile.click());
-$("#save-chart").addEventListener("click", saveChart);
+$("#save-chart").addEventListener("click", exportChartJson);
 $("#load-audio").addEventListener("click", () => refs.audioFile.click());
+$("#load-jacket").addEventListener("click", () => refs.jacketFile.click());
 $("#undo-button").addEventListener("click", undo);
 $("#redo-button").addEventListener("click", redo);
 refs.chartFile.addEventListener("change", () => loadChartFile(refs.chartFile.files[0]));
+refs.projectPackage.addEventListener("change", () => loadProjectPackage(refs.projectPackage.files[0]));
 refs.audioFile.addEventListener("change", () => loadAudio(refs.audioFile.files[0]).catch((error) => setStatus(`音乐加载失败：${error.message}`)));
+refs.jacketFile.addEventListener("change", () => loadJacket(refs.jacketFile.files[0]).catch((error) => setStatus(`曲绘加载失败：${error.message}`)));
 refs.panelToggle.addEventListener("click", () => setEditorPanelOpen(!state.editorPanelOpen));
 refs.viewToggle.addEventListener("click", toggleView);
 refs.addCameraKeyframe.addEventListener("click", addCameraKeyframesAtCurrentTime);
@@ -1926,7 +2817,13 @@ window.addEventListener("keydown", (event) => {
     return;
   }
   if (typingTarget) return;
-  if (event.code === "Equal") {
+  if ((event.ctrlKey || event.metaKey) && event.code === "KeyC") {
+    event.preventDefault();
+    copySelection();
+  } else if ((event.ctrlKey || event.metaKey) && event.code === "KeyV") {
+    event.preventDefault();
+    pasteClipboard();
+  } else if (event.code === "Equal") {
     event.preventDefault();
     toggleView();
   } else if (event.code === "Space") {
@@ -1938,15 +2835,7 @@ window.addEventListener("keydown", (event) => {
   } else if (event.code === "Delete" || event.code === "Backspace") {
     event.preventDefault();
     if (state.selectedNotes.size) $("#delete-selection").click();
-    else if (state.selectedEvents.size) {
-      commitChange(() => {
-        state.selectedEvents.forEach((token) => {
-          const [timelineId, id] = token.split(":");
-          state.chart.timelines[timelineId] = state.chart.timelines[timelineId].filter((item) => item.id !== id);
-        });
-        state.selectedEvents.clear();
-      }, "已删除所选事件", { trajectory: true });
-    }
+    else if (state.selectedEvents.size) deleteSelectedEvents();
   } else if ((event.ctrlKey || event.metaKey) && event.code === "KeyZ") {
     event.preventDefault();
     event.shiftKey ? redo() : undo();
@@ -1955,7 +2844,7 @@ window.addEventListener("keydown", (event) => {
     redo();
   } else if ((event.ctrlKey || event.metaKey) && event.code === "KeyS") {
     event.preventDefault();
-    saveChart();
+    saveProject();
   }
 });
 

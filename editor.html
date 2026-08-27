@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>ParticleSoar Chart Editor</title>
-  <link rel="stylesheet" href="./editor.css?v=20260826-23">
+  <link rel="stylesheet" href="./editor.css?v=20260827-44">
   <script type="importmap">
   {
     "imports": {
@@ -18,7 +18,7 @@
   <div class="editor-shell editor-panel-collapsed">
     <section class="preview-stage" aria-label="3D trajectory preview">
       <canvas id="preview-canvas" hidden></canvas>
-      <iframe id="game-preview" src="./index.html?editorPreview=1&v=20260826-23" title="游玩场景预览"></iframe>
+      <iframe id="game-preview" src="./index.html?editorPreview=1&v=20260827-44" title="游玩场景预览"></iframe>
       <div class="preview-state">
         <span id="dirty-state">已保存</span>
         <button id="view-toggle" type="button" title="切换自由/游玩视角"><strong id="view-mode">FREE</strong></button>
@@ -67,13 +67,21 @@
       <header class="topbar">
       <div class="project-identity">
         <strong>ParticleSoar</strong>
-        <span>CHART EDITOR</span>
+        <span>CHART EDITOR · <b id="project-location">NO PROJECT</b></span>
       </div>
       <div class="command-strip">
+        <div class="difficulty-manager">
+          <select id="difficulty-select" aria-label="当前难度" title="切换当前难度"></select>
+          <button id="add-difficulty" class="icon-button" type="button" title="新增难度" aria-label="新增难度">＋</button>
+          <button id="remove-difficulty" class="icon-button" type="button" title="从工程移除当前难度" aria-label="移除当前难度">−</button>
+        </div>
         <button id="new-chart" type="button">新建</button>
-        <button id="load-chart" type="button">加载谱面</button>
-        <button id="save-chart" type="button">保存谱面</button>
+        <button id="open-project" type="button">打开工程</button>
+        <button id="save-project" type="button">保存工程</button>
+        <button id="load-chart" type="button">导入 JSON</button>
+        <button id="save-chart" type="button">导出 JSON</button>
         <button id="load-audio" type="button">加载音乐</button>
+        <button id="load-jacket" type="button">加载曲绘</button>
         <button id="undo-button" class="icon-button" type="button" title="撤销" aria-label="撤销">↶</button>
         <button id="redo-button" class="icon-button" type="button" title="重做" aria-label="重做">↷</button>
       </div>
@@ -95,6 +103,8 @@
             <button class="active" data-note-kind="tap" type="button">TAP</button>
             <button data-note-kind="hold" type="button">HOLD</button>
           </div>
+          <button id="copy-selection" type="button" title="复制所选音符或事件（Ctrl+C）">复制</button>
+          <button id="paste-selection" type="button" title="粘贴到当前时间（Ctrl+V）">粘贴</button>
           <button id="delete-selection" type="button">删除所选</button>
           <label>缩放<input id="note-zoom" type="range"></label>
         </header>
@@ -116,14 +126,17 @@
       <section class="event-panel">
         <header class="panel-header">
           <strong>事件时间轴</strong>
-          <span>双击轨道添加事件</span>
+          <span>拖拽框选 · 双击轨道添加事件</span>
         </header>
         <div class="event-timelines" id="event-timelines"></div>
         <footer class="batch-strip">
           <span><strong id="selected-event-count">0</strong> 个事件已选择</span>
           <label>&Delta; Time<input id="batch-event-time" type="number" step="0.001" value="0"></label>
           <label>&times; Value<input id="batch-event-scale" type="number" step="0.1" value="1"></label>
-          <button id="apply-event-batch" type="button">应用批量修改</button>
+          <div class="batch-action-buttons">
+            <button id="apply-event-batch" type="button">应用修改</button>
+            <button id="delete-event-selection" type="button">删除</button>
+          </div>
         </footer>
       </section>
 
@@ -175,15 +188,40 @@
 
       <footer class="statusbar">
         <span id="status-message">就绪</span>
-        <span>左键放置/选择 · 右键拖拽擦除 · E 编辑区 · = 视角 · K 相机帧</span>
+        <span>左键放置/选择 · 右键拖拽擦除 · Ctrl+C/V 复制粘贴 · E 编辑区 · = 视角 · K 相机帧</span>
       </footer>
     </div>
   </div>
 
+  <dialog id="difficulty-dialog" class="editor-dialog">
+    <form id="difficulty-form" method="dialog">
+      <header>
+        <strong>新增难度</strong>
+        <button class="icon-button" value="cancel" type="submit" aria-label="关闭">×</button>
+      </header>
+      <div class="dialog-fields">
+        <label>难度标识<input id="new-difficulty-label" maxlength="16" value="HD"></label>
+        <label>等级<input id="new-difficulty-level" type="number" min="0" step="1" value="1"></label>
+        <label>谱师<input id="new-difficulty-charter"></label>
+      </div>
+      <fieldset>
+        <legend>起始内容</legend>
+        <label><input type="radio" name="difficulty-source" value="blank" checked> 空谱（保留歌曲时长和 BPM）</label>
+        <label><input type="radio" name="difficulty-source" value="copy"> 复制当前谱面</label>
+      </fieldset>
+      <footer>
+        <button value="cancel" type="submit">取消</button>
+        <button id="confirm-difficulty" value="default" type="submit">创建难度</button>
+      </footer>
+    </form>
+  </dialog>
+
   <input id="chart-file-input" type="file" accept="application/json,.json" hidden>
+  <input id="project-package-input" type="file" accept="application/zip,.zip,.psproject" hidden>
   <input id="audio-file-input" type="file" accept="audio/*" hidden>
+  <input id="jacket-file-input" type="file" accept="image/*" hidden>
   <audio id="audio-player" preload="auto"></audio>
 
-  <script type="module" src="./src/editor.js?v=20260826-23"></script>
+  <script type="module" src="./src/editor.js?v=20260827-44"></script>
 </body>
 </html>

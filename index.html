@@ -55,8 +55,8 @@ import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js"
 import { Line2 } from "three/addons/lines/Line2.js";
 import { LineGeometry } from "three/addons/lines/LineGeometry.js";
 import { LineMaterial } from "three/addons/lines/LineMaterial.js";
-import { CHART_FORMAT, chartForGame } from "./src/chart-core.js?v=20260826-23";
-import { CONFIG } from "./src/config.js?v=20260826-23";
+import { CHART_FORMAT, chartForGame } from "./src/chart-core.js?v=20260827-44";
+import { CONFIG } from "./src/config.js?v=20260827-44";
 
 const gameConfig = CONFIG.game;
 const colorConfig = CONFIG.colors;
@@ -153,6 +153,7 @@ function applyCameraProfile(
   const worldTarget = anchor.clone().add(followTarget.applyQuaternion(orientation));
 
   camera.position.copy(worldPosition);
+  camera.up.set(0, 1, 0).applyQuaternion(orientation).normalize();
   camera.lookAt(worldTarget);
   camera.updateProjectionMatrix();
   return worldTarget;
@@ -1453,7 +1454,7 @@ function spawnNote(rawNote, index = 0) {
     hitPosition,
     tailHitPosition,
     scoreWeight: rawNote.scoreWeight ?? 1,
-    hitGroup: rawNote.hitGroup ?? rawNote.group ?? `note-${index}`,
+    hitGroup: rawNote.hitGroup ?? rawNote.group ?? `hit-${hitTime}`,
     pulse: Math.random() * 10,
     judged: false,
     hit: false,
@@ -2055,14 +2056,16 @@ function rebuildEditorRoutes() {
 function frameEditorFreeCamera() {
   const target = receiverState.anchor.clone();
   const viewDirection = camera.position.clone().sub(target);
-  if (viewDirection.lengthSq() < 0.000001) viewDirection.set(0, 0, 1);
+  if (viewDirection.lengthSq() < 0.000001) {
+    viewDirection.set(0, 0, 1).applyQuaternion(receiverState.currentQuaternion);
+  }
   const previewConfig = gameConfig.editorPreview;
   const initialDistance = Math.max(
     previewConfig.initialDistance,
     playfieldConfig.receiverRadius * previewConfig.receiverDistanceScale
   );
   camera.position.copy(target).addScaledVector(viewDirection.normalize(), initialDistance);
-  camera.up.set(0, 1, 0);
+  camera.up.set(0, 1, 0).applyQuaternion(receiverState.currentQuaternion).normalize();
   controls.target.copy(target);
   configureEditorFreeCameraLimits(target, initialDistance);
   controls.update();
@@ -2515,7 +2518,7 @@ function inputTypesForCode(code) {
   if (code === "Space") return ["space"];
   if (leftKeyCodes.has(code)) return ["left"];
   if (rightKeyCodes.has(code)) return ["right"];
-  if (topKeyCodes.has(code)) return ["top", "middle"];
+  if (topKeyCodes.has(code)) return ["top"];
   if (middleKeyCodes.has(code)) return ["middle"];
   return [];
 }
@@ -2729,6 +2732,7 @@ function holdSegment(note, chartTime) {
     return {
       head: {
         position: headTransform ? headTransform.position : note.hitPosition.clone(),
+        quaternion: headTransform ? headTransform.quaternion : note.zone.noteQuaternion,
         progress: 1 - headTimeToHit / timingConfig.staticNoteLeadSeconds,
         timeToHit: headTimeToHit
       },
@@ -2748,7 +2752,10 @@ function holdSegment(note, chartTime) {
     head.position.copy(note.hitPosition);
   }
   return {
-    head,
+    head: {
+      ...head,
+      quaternion: note.zone.noteQuaternion
+    },
     tail,
     progress: head.progress,
     timeToHit: head.timeToHit
@@ -2853,6 +2860,9 @@ function updateHoldNoteVisual(note, segment, opacity, t, chartTime) {
   note.mesh.position.set(0, 0, 0);
   note.mesh.quaternion.identity();
   head.position.copy(start);
+  if (!isCentralNote(note)) {
+    head.quaternion.copy(segment.head.quaternion ?? note.zone.noteQuaternion);
+  }
 
   bodyParticles.forEach((particle, index) => {
     if (opacity <= 0.02 || (holdTrajectory ? remainingTrajectoryTime <= 0.002 : straightLength <= 0.05)) {

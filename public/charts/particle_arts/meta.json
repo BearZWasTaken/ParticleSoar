@@ -1,0 +1,15 @@
+{
+  "format": "particlesoar-song@1",
+  "title": "Particle Arts",
+  "composer": "Virtual Self",
+  "illustrator": "who?",
+  "audio": "Virtual Self - Particle Arts (Cut).mp3",
+  "charts": [
+    {
+      "file": "ld.json",
+      "difficultyLabel": "LD",
+      "level": 30,
+      "charter": "first bear"
+    }
+  ]
+}

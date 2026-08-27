@@ -1,4 +1,4 @@
-import { CONFIG } from "./config.js?v=20260826-23";
+import { CONFIG } from "./config.js?v=20260827-44";
 
 const chartConfig = CONFIG.chart;
 const chartDefaults = chartConfig.defaults;
@@ -413,10 +413,14 @@ export function buildReceiverTrajectory(chart, sampleSeconds = 0.04) {
   for (let time = 0; time < duration + sampleSeconds * 0.5; time += sampleSeconds) {
     const clampedTime = Math.min(duration, time);
     const { direction, right, yaw, pitch } = directionAt(chart, clampedTime);
-    const speed = Math.max(0, sampleTimeline(chart.timelines.moveSpeed, clampedTime, 0));
+    const forwardSpeed = Math.max(0, sampleTimeline(chart.timelines.moveSpeed, clampedTime, 0));
+    const strafeSpeed = sampleTimeline(chart.timelines.moveStrafeSpeed, clampedTime, 0);
+    const speed = Math.hypot(forwardSpeed, strafeSpeed);
     const delta = clampedTime - previousTime;
     if (samples.length > 0) {
-      position = position.map((value, index) => value + direction[index] * speed * delta);
+      position = position.map((value, index) => (
+        value + (direction[index] * forwardSpeed + right[index] * strafeSpeed) * delta
+      ));
     }
     const sideOffset = chart.playfield.sideLaneOffset;
     samples.push({
@@ -428,7 +432,9 @@ export function buildReceiverTrajectory(chart, sampleSeconds = 0.04) {
       lateral: right,
       yaw,
       pitch,
-      speed
+      speed,
+      forwardSpeed,
+      strafeSpeed
     });
     previousTime = clampedTime;
     if (clampedTime >= duration) break;
@@ -460,6 +466,8 @@ export function trajectoryPoseAt(samples, time) {
     direction: interpolate(from.direction, to.direction),
     lateral: interpolate(from.lateral, to.lateral),
     speed: from.speed + (to.speed - from.speed) * progress,
+    forwardSpeed: from.forwardSpeed + (to.forwardSpeed - from.forwardSpeed) * progress,
+    strafeSpeed: from.strafeSpeed + (to.strafeSpeed - from.strafeSpeed) * progress,
     yaw: from.yaw + (to.yaw - from.yaw) * progress,
     pitch: from.pitch + (to.pitch - from.pitch) * progress
   };
