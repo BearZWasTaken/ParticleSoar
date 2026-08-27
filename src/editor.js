@@ -6,21 +6,27 @@ import { LineMaterial } from "three/addons/lines/LineMaterial.js";
 import {
   EASING_PRESET_GROUPS,
   TIMELINE_DEFINITIONS,
+  beatAt,
+  bpmAt,
   bpmKeyAt,
   buildReceiverTrajectory,
+  buildTempoMap,
   compactChart,
   createDefaultChart,
+  findDuplicateNotePlacement,
+  findDuplicateTimelineEvent,
   gridTimes,
   normalizeChart,
   sampleTimeline,
   snapTime,
   snapWPos,
   speedColor,
+  timeAtBeat,
   trajectoryPoseAt,
   receiverFrameAt
-} from "./chart-core.js?v=20260827-44";
-import { CONFIG } from "./config.js?v=20260827-44";
-import { createProjectZip, projectJson, readProjectZip } from "./project-package.js?v=20260827-44";
+} from "./chart-core.js?v=20260828-56";
+import { CONFIG } from "./config.js?v=20260828-56";
+import { createProjectZip, projectJson, readProjectZip } from "./project-package.js?v=20260828-56";
 
 const editorConfig = CONFIG.editor;
 const colorConfig = CONFIG.colors;
@@ -73,6 +79,16 @@ const refs = {
   bpmKeyTime: $("#bpm-key-time"),
   bpmValue: $("#bpm-value"),
   bpmBeatsPerBar: $("#bpm-beats-per-bar"),
+  bpmRampEditor: $("#bpm-ramp-editor"),
+  bpmRampRange: $("#bpm-ramp-range"),
+  bpmRampControls: $("#bpm-ramp-controls"),
+  bpmRampBeats: $("#bpm-ramp-beats"),
+  bpmRampCurve: $("#bpm-ramp-curve"),
+  bpmRampStatus: $("#bpm-ramp-status"),
+  bpmRampAnchorList: $("#bpm-ramp-anchor-list"),
+  bpmRampRepair: $("#bpm-ramp-repair"),
+  repairRampStart: $("#repair-ramp-start"),
+  repairRampEnd: $("#repair-ramp-end"),
   noteScroll: $("#note-scroll"),
   noteContent: $("#note-content"),
   noteGrid: $("#note-grid"),
@@ -140,6 +156,11 @@ const state = {
   jacketSourceFile: null,
   jacketUrl: null
 };
+state.tempoMap = buildTempoMap(state.chart);
+
+function refreshTempoMap() {
+  state.tempoMap = buildTempoMap(state.chart);
+}
 
 const svgNamespace = "http://www.w3.org/2000/svg";
 const noteLayout = editorConfig.noteLayout;
@@ -217,6 +238,7 @@ function snapshot() {
 function restoreSnapshot(serialized, message) {
   state.continuousEdit = null;
   state.chart = normalizeChart(JSON.parse(serialized));
+  refreshTempoMap();
   state.selectedNotes.clear();
   state.selectedEvents.clear();
   state.currentTime = Math.min(state.currentTime, state.chart.timing.duration);
@@ -249,7 +271,16 @@ function applyContinuousChange(control, key, mutator, message, {
 } = {}) {
   beginContinuousEdit(control, key);
   mutator();
+  if (notes && findDuplicateNotePlacement(state.chart.notes)) {
+    const previous = state.undo.pop();
+    state.continuousEdit = null;
+    if (previous) state.chart = normalizeChart(JSON.parse(previous));
+    rebuildEverything();
+    setStatus("该时间与位置已有音符，修改已取消");
+    return;
+  }
   state.chart = normalizeChart(state.chart);
+  if (bpm) refreshTempoMap();
   setDirty(true);
   if (trajectory) rebuildTrajectory();
   if (notes || bpm) renderNoteEditor();
@@ -258,13 +289,28 @@ function applyContinuousChange(control, key, mutator, message, {
   if (!trajectory && notes) rebuildPreviewNotes();
   scheduleGamePreviewChartSync();
   updateTimeUi(false);
-  setStatus(message);
+  const duplicateEvent = events ? findDuplicateTimelineEvent(state.chart.timelines) : null;
+  setStatus(duplicateEvent
+    ? `${duplicateEvent.label}：${duplicateEvent.duplicate.time.toFixed(3)}s 已有相同值 ${duplicateEvent.duplicate.value}`
+    : message);
 }
 
-function commitChange(mutator, message, { trajectory = false } = {}) {
+function commitChange(mutator, message, { trajectory = false, events = false } = {}) {
+  const selectedNotesBefore = new Set(state.selectedNotes);
+  const selectedEventsBefore = new Set(state.selectedEvents);
   beginChange();
   mutator();
+  if (findDuplicateNotePlacement(state.chart.notes)) {
+    const previous = state.undo.pop();
+    if (previous) state.chart = normalizeChart(JSON.parse(previous));
+    state.selectedNotes = selectedNotesBefore;
+    state.selectedEvents = selectedEventsBefore;
+    rebuildEverything();
+    setStatus("该时间与位置已有音符，操作已取消");
+    return false;
+  }
   state.chart = normalizeChart(state.chart);
+  refreshTempoMap();
   setDirty(true);
   if (trajectory) rebuildTrajectory();
   renderNoteEditor();
@@ -274,7 +320,11 @@ function commitChange(mutator, message, { trajectory = false } = {}) {
   renderEffects();
   rebuildPreviewNotes();
   syncGamePreviewChart();
-  setStatus(message);
+  const duplicateEvent = events ? findDuplicateTimelineEvent(state.chart.timelines) : null;
+  setStatus(duplicateEvent
+    ? `${duplicateEvent.label}：${duplicateEvent.duplicate.time.toFixed(3)}s 已有相同值 ${duplicateEvent.duplicate.value}`
+    : message);
+  return true;
 }
 
 function undo() {
@@ -662,18 +712,25 @@ function xToWPos(x, width) {
 
 function holdGridStepAt(time) {
   if (state.chart.timing.subdivision === 0) return 0.001;
+  const tempoMap = state.tempoMap;
   const key = bpmKeyAt(state.chart, time);
-  return ((60 / key.bpm) * key.beatsPerBar) / state.chart.timing.subdivision;
+  const keyIndex = state.chart.timing.bpmKeys.indexOf(key);
+  const keyBeat = tempoMap.keyBeats[keyIndex] ?? 0;
+  const currentBeat = beatAt(state.chart, time, tempoMap);
+  const beatStep = key.beatsPerBar / state.chart.timing.subdivision;
+  const nextSubdivision = Math.floor((currentBeat - keyBeat) / beatStep + 1 + 1e-7);
+  const nextTime = timeAtBeat(state.chart, keyBeat + nextSubdivision * beatStep, tempoMap);
+  return Math.max(0.001, nextTime - time);
 }
 
 function defaultHoldEndTime(hitTime) {
   const duration = state.chart.timing.duration;
   const step = Math.max(0.001, holdGridStepAt(hitTime));
-  return Math.min(duration, Math.max(hitTime + 0.001, snapTime(state.chart, hitTime + step)));
+  return Math.min(duration, Math.max(hitTime + 0.001, snapTime(state.chart, hitTime + step, state.tempoMap)));
 }
 
 function holdEndTimeAtY(note, y) {
-  const snapped = snapTime(state.chart, yToTime(y));
+  const snapped = snapTime(state.chart, yToTime(y), state.tempoMap);
   return snapped > note.hitTime ? snapped : defaultHoldEndTime(note.hitTime);
 }
 
@@ -808,7 +865,7 @@ function renderNoteEditor({ waveform = true } = {}) {
     height
   }));
 
-  gridTimes(state.chart).forEach((grid) => {
+  gridTimes(state.chart, 0, state.chart.timing.duration, state.tempoMap).forEach((grid) => {
     refs.noteGrid.appendChild(makeSvg("line", {
       class: `grid-line${grid.beat ? " beat" : ""}${grid.major ? " major" : ""}`,
       x1: 0,
@@ -884,7 +941,11 @@ function createNoteAt(event) {
     wPos,
     ...(state.noteKind === "hold" ? { endTime: defaultHoldEndTime(hitTime) } : {})
   };
-  commitChange(() => state.chart.notes.push(note), `已放置 ${state.noteKind.toUpperCase()} ${type} 音符`);
+  const created = commitChange(
+    () => state.chart.notes.push(note),
+    `已放置 ${state.noteKind.toUpperCase()} ${type} 音符`
+  );
+  if (!created) return;
   state.selectedEvents.clear();
   state.selectedNotes.clear();
   state.selectedNotes.add(note.id);
@@ -1138,7 +1199,7 @@ function renderEventTimelines() {
   content.style.minWidth = `${TIMELINE_DEFINITIONS.length * 108}px`;
   content.style.gridTemplateColumns = `repeat(${TIMELINE_DEFINITIONS.length}, minmax(100px, 1fr))`;
 
-  gridTimes(state.chart).forEach((grid) => {
+  gridTimes(state.chart, 0, state.chart.timing.duration, state.tempoMap).forEach((grid) => {
     const line = document.createElement("div");
     line.className = `event-grid-line${grid.beat ? " beat" : ""}${grid.major ? " major" : ""}`;
     line.style.top = `${timeToY(grid.time)}px`;
@@ -1240,7 +1301,7 @@ function addCameraKeyframesAtCurrentTime() {
       }
       state.selectedEvents.add(eventToken(timelineId, timelineEvent.id));
     });
-  }, `已在 ${time.toFixed(3)}s 写入当前相机视角`);
+  }, `已在 ${time.toFixed(3)}s 写入当前相机视角`, { trajectory: true, events: true });
 }
 
 function addTimelineEvent(event, column) {
@@ -1251,7 +1312,7 @@ function addTimelineEvent(event, column) {
   const definition = TIMELINE_DEFINITIONS.find((item) => item.id === timelineId);
   const value = sampleTimeline(state.chart.timelines[timelineId], time, definition.defaultValue);
   const timelineEvent = { id: crypto.randomUUID(), time, value, easing: "linear", formula: "t" };
-  commitChange(() => state.chart.timelines[timelineId].push(timelineEvent), `已添加 ${definition.label} 事件`, { trajectory: true });
+  commitChange(() => state.chart.timelines[timelineId].push(timelineEvent), `已添加 ${definition.label} 事件`, { trajectory: true, events: true });
   state.selectedNotes.clear();
   state.selectedEvents.clear();
   state.selectedEvents.add(eventToken(timelineId, timelineEvent.id));
@@ -1512,6 +1573,13 @@ function handlePointerUp(event) {
     renderInspector();
     return;
   }
+  if (!wasEvent && findDuplicateNotePlacement(state.chart.notes)) {
+    const previous = state.undo.pop();
+    if (previous) state.chart = normalizeChart(JSON.parse(previous));
+    rebuildEverything();
+    setStatus("该时间与位置已有音符，移动已取消");
+    return;
+  }
   state.chart = normalizeChart(state.chart);
   setDirty(true);
   if (wasEvent) rebuildTrajectory();
@@ -1520,7 +1588,10 @@ function handlePointerUp(event) {
   renderInspector();
   rebuildPreviewNotes();
   syncGamePreviewChart();
-  setStatus(wasEvent ? "已移动事件" : "已移动音符");
+  const duplicateEvent = wasEvent ? findDuplicateTimelineEvent(state.chart.timelines) : null;
+  setStatus(duplicateEvent
+    ? `${duplicateEvent.label}：${duplicateEvent.duplicate.time.toFixed(3)}s 已有相同值 ${duplicateEvent.duplicate.value}`
+    : wasEvent ? "已移动事件" : "已移动音符");
 }
 
 // Inspector and lists
@@ -1618,7 +1689,7 @@ function pasteEvents(clipboard) {
     pasted.forEach(({ timelineId, event }) => state.chart.timelines[timelineId].push(event));
     state.selectedNotes.clear();
     state.selectedEvents = new Set(pasted.map(({ timelineId, event }) => eventToken(timelineId, event.id)));
-  }, `已粘贴 ${pasted.length} 个事件`, { trajectory: true });
+  }, `已粘贴 ${pasted.length} 个事件`, { trajectory: true, events: true });
 }
 
 function pasteClipboard() {
@@ -1655,6 +1726,113 @@ function renderInspector() {
   }
 }
 
+function selectedBpmRange() {
+  const keys = state.chart.timing.bpmKeys;
+  const index = keys.findIndex((key) => key.id === state.selectedBpmKey);
+  return index >= 0 ? { index, key: keys[index], next: keys[index + 1] ?? null } : null;
+}
+
+function estimatedRampBeats(key, next) {
+  return Math.max(1, Math.round((next.time - key.time) * (key.bpm + next.bpm) / 120));
+}
+
+function rampIssueFor(key) {
+  const range = selectedBpmRange();
+  return range?.key === key
+    ? state.tempoMap.issues.find((issue) => issue.keyIndex === range.index) ?? null
+    : null;
+}
+
+function renderBpmRampCurve(key, next) {
+  refs.bpmRampCurve.replaceChildren();
+  const tempoMap = state.tempoMap;
+  const samples = Array.from({ length: 81 }, (_, index) => {
+    const time = key.time + (next.time - key.time) * index / 80;
+    return { time, bpm: bpmAt(state.chart, time, tempoMap) };
+  });
+  const values = samples.map((sample) => sample.bpm);
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  const padding = Math.max(2, (max - min) * 0.12);
+  const rangeMin = Math.max(0, min - padding);
+  const rangeMax = max + padding;
+  const pointAt = (time, bpm) => ({
+    x: (time - key.time) / Math.max(0.000001, next.time - key.time) * 300,
+    y: 78 - (bpm - rangeMin) / Math.max(0.000001, rangeMax - rangeMin) * 72
+  });
+  for (let index = 1; index < 4; index += 1) {
+    const y = index * 84 / 4;
+    refs.bpmRampCurve.appendChild(makeSvg("line", { class: "ramp-grid", x1: 0, x2: 300, y1: y, y2: y }));
+  }
+  const path = samples.map((sample, index) => {
+    const point = pointAt(sample.time, sample.bpm);
+    return `${index === 0 ? "M" : "L"}${point.x.toFixed(2)} ${point.y.toFixed(2)}`;
+  }).join(" ");
+  refs.bpmRampCurve.appendChild(makeSvg("path", { class: "ramp-path", d: path }));
+  key.ramp.anchors.forEach((anchor) => {
+    const point = pointAt(anchor.time, bpmAt(state.chart, anchor.time, tempoMap));
+    refs.bpmRampCurve.appendChild(makeSvg("circle", {
+      class: "ramp-anchor",
+      cx: point.x,
+      cy: point.y,
+      r: 3.5
+    }));
+  });
+  const issue = rampIssueFor(key);
+  refs.bpmRampStatus.classList.toggle("warning", Boolean(issue));
+  refs.bpmRampStatus.textContent = issue
+    ? issue.reason
+    : `${key.ramp.anchors.length} 个关键拍 · ${min.toFixed(2)}–${max.toFixed(2)} BPM · 单调可行`;
+  refs.bpmRampRepair.hidden = !issue;
+}
+
+function renderBpmRampEditor(selected, syncEditor = true) {
+  const keys = state.chart.timing.bpmKeys;
+  const index = selected ? keys.indexOf(selected) : -1;
+  const next = index >= 0 ? keys[index + 1] : null;
+  refs.bpmRampEditor.hidden = !selected;
+  if (!selected) return;
+  refs.bpmRampControls.hidden = false;
+  const hasRange = Boolean(next);
+  $("#toggle-bpm-ramp").disabled = !hasRange;
+  refs.bpmRampBeats.disabled = !selected.ramp;
+  $("#add-ramp-beat").disabled = !selected.ramp;
+  $("#add-ramp-bar").disabled = !selected.ramp;
+  refs.bpmRampCurve.hidden = !selected.ramp;
+  refs.bpmRampStatus.hidden = !selected.ramp;
+  refs.bpmRampRepair.hidden = true;
+  refs.bpmRampAnchorList.replaceChildren();
+  if (!next) {
+    refs.bpmRampRange.textContent = "后面没有 BpmKey";
+    $("#toggle-bpm-ramp").textContent = "创建变速";
+    return;
+  }
+  refs.bpmRampRange.textContent = `${formatTime(selected.time)} → ${formatTime(next.time)} · ${next.bpm.toFixed(2)} BPM`;
+  $("#toggle-bpm-ramp").textContent = selected.ramp ? "删除变速" : "创建变速";
+  if (!selected.ramp) {
+    refs.bpmRampBeats.value = estimatedRampBeats(selected, next);
+    return;
+  }
+  if (syncEditor) refs.bpmRampBeats.value = selected.ramp.beats;
+  selected.ramp.anchors.forEach((anchor) => {
+    const item = document.createElement("div");
+    const isBar = anchor.kind === "bar";
+    const position = isBar ? anchor.position : anchor.beat;
+    const maxPosition = isBar
+      ? Math.max(1, Math.floor((selected.ramp.beats - 1) / selected.beatsPerBar))
+      : selected.ramp.beats - 1;
+    item.className = "bpm-ramp-anchor";
+    item.dataset.anchorId = anchor.id;
+    item.innerHTML = `
+      <small>${isBar ? "小节" : "节拍"}</small>
+      <input class="ramp-anchor-beat" type="number" min="1" max="${maxPosition}" step="1" value="${position}" aria-label="${isBar ? "相对小节数" : "相对拍数"}">
+      <input class="ramp-anchor-time" type="number" min="${selected.time + 0.001}" max="${next.time - 0.001}" step="0.001" value="${anchor.time.toFixed(3)}" aria-label="锚点时间">
+      <button class="remove-ramp-anchor" type="button" aria-label="删除变速锚点">×</button>`;
+    refs.bpmRampAnchorList.appendChild(item);
+  });
+  renderBpmRampCurve(selected, next);
+}
+
 function renderBpmKeys(syncEditor = true) {
   const keys = state.chart.timing.bpmKeys;
   if (!keys.some((key) => key.id === state.selectedBpmKey)) {
@@ -1665,7 +1843,7 @@ function renderBpmKeys(syncEditor = true) {
     const item = document.createElement("div");
     item.className = `bpm-key-item${state.selectedBpmKey === key.id ? " selected" : ""}`;
     item.dataset.bpmId = key.id;
-    item.innerHTML = `<strong>${formatTime(key.time)}</strong><strong>${key.bpm.toFixed(2)} BPM</strong><span>${key.beatsPerBar}/4</span><span>双击跳转</span>`;
+    item.innerHTML = `<strong>${formatTime(key.time)}</strong><strong>${key.bpm.toFixed(2)} BPM</strong><span>${key.beatsPerBar}/4</span><span>${key.ramp ? "自动变速" : "双击跳转"}</span>`;
     refs.bpmList.appendChild(item);
   });
   const selected = keys.find((key) => key.id === state.selectedBpmKey);
@@ -1675,6 +1853,7 @@ function renderBpmKeys(syncEditor = true) {
     refs.bpmValue.value = selected.bpm;
     refs.bpmBeatsPerBar.value = selected.beatsPerBar;
   }
+  renderBpmRampEditor(selected, syncEditor);
   $("#remove-bpm-key").disabled = keys.length <= 1;
 }
 
@@ -1705,6 +1884,7 @@ function syncChartControls() {
 }
 
 function rebuildEverything() {
+  refreshTempoMap();
   rebuildTrajectory();
   renderNoteEditor();
   renderEventTimelines();
@@ -1729,7 +1909,7 @@ function updateTimeUi(scrollIntoView = false) {
   const eventPlayhead = refs.eventTimelines.querySelector(".timeline-playhead");
   if (eventPlayhead) eventPlayhead.style.top = `${timeToY(state.currentTime)}px`;
   const activeBpmKey = bpmKeyAt(state.chart, state.currentTime);
-  refs.currentBpm.textContent = activeBpmKey.bpm.toFixed(2);
+  refs.currentBpm.textContent = bpmAt(state.chart, state.currentTime, state.tempoMap).toFixed(2);
   refs.currentBeats.textContent = String(activeBpmKey.beatsPerBar);
   updateTimelineCurrentValues();
   updateCameraState();
@@ -2493,7 +2673,7 @@ $("#apply-event-batch").addEventListener("click", () => {
       event.time = snapTime(state.chart, event.time + deltaTime);
       event.value *= scale;
     });
-  }, "已批量修改事件", { trajectory: true });
+  }, "已批量修改事件", { trajectory: true, events: true });
 });
 
 function deleteSelectedEvents() {
@@ -2616,11 +2796,14 @@ $("#add-bpm-key").addEventListener("click", () => {
   const key = {
     id: crypto.randomUUID(),
     time: state.currentTime,
-    bpm: active.bpm,
+    bpm: bpmAt(state.chart, state.currentTime),
     beatsPerBar: active.beatsPerBar
   };
   state.selectedBpmKey = key.id;
-  commitChange(() => state.chart.timing.bpmKeys.push(key), "已添加 BPM Key");
+  commitChange(() => {
+    delete active.ramp;
+    state.chart.timing.bpmKeys.push(key);
+  }, "已添加 BPM Key");
   updateTimeUi(false);
 });
 
@@ -2628,6 +2811,8 @@ $("#remove-bpm-key").addEventListener("click", () => {
   if (!state.selectedBpmKey || state.chart.timing.bpmKeys.length <= 1) return;
   const removedId = state.selectedBpmKey;
   commitChange(() => {
+    const index = state.chart.timing.bpmKeys.findIndex((key) => key.id === removedId);
+    if (index > 0) delete state.chart.timing.bpmKeys[index - 1].ramp;
     state.chart.timing.bpmKeys = state.chart.timing.bpmKeys.filter((key) => key.id !== removedId);
     state.selectedBpmKey = null;
   }, "已删除 BPM Key");
@@ -2662,10 +2847,147 @@ refs.bpmBeatsPerBar.addEventListener("input", (event) => {
   }, "每小节拍数已更新", { bpm: true });
 });
 
+function applyRampContinuousChange(control, key, mutator, message) {
+  beginContinuousEdit(control, key);
+  mutator();
+  state.chart = normalizeChart(state.chart);
+  refreshTempoMap();
+  setDirty(true);
+  renderNoteEditor();
+  renderEventTimelines();
+  const range = selectedBpmRange();
+  if (range?.key.ramp && range.next) renderBpmRampCurve(range.key, range.next);
+  scheduleGamePreviewChartSync();
+  updateTimeUi(false);
+  setStatus(message);
+}
+
+$("#toggle-bpm-ramp").addEventListener("click", () => {
+  const range = selectedBpmRange();
+  if (!range?.next) return;
+  const removing = Boolean(range.key.ramp);
+  commitChange(() => {
+    if (removing) delete range.key.ramp;
+    else range.key.ramp = { beats: estimatedRampBeats(range.key, range.next), anchors: [] };
+  }, removing ? "已删除自动变速段" : "已创建自动变速段");
+});
+
+refs.bpmRampBeats.addEventListener("input", (event) => {
+  const value = inputNumber(event.target);
+  const range = selectedBpmRange();
+  if (value === null || !range?.key.ramp) return;
+  applyRampContinuousChange(event.target, `ramp:${range.key.id}:beats`, () => {
+    range.key.ramp.beats = Math.max(1, Math.round(value));
+  }, "变速段总拍数已更新");
+});
+
+function editedRampBeats(range) {
+  const inputValue = inputNumber(refs.bpmRampBeats);
+  return inputValue === null
+    ? range.key.ramp.beats
+    : Math.max(1, Math.round(inputValue));
+}
+
+function addRampAnchor(kind) {
+  let range = selectedBpmRange();
+  if (!range?.next || !range.key.ramp) return;
+  const totalBeats = editedRampBeats(range);
+  if (state.currentTime <= range.key.time + 0.0005 || state.currentTime >= range.next.time - 0.0005) {
+    setStatus("请将播放位置放在所选 BpmKey 与下一个 BpmKey 之间");
+    return;
+  }
+  const anchors = [...range.key.ramp.anchors].sort((left, right) => left.time - right.time);
+  const previous = anchors.filter((anchor) => anchor.time < state.currentTime).at(-1);
+  const following = anchors.find((anchor) => anchor.time > state.currentTime);
+  const previousBeat = previous?.beat ?? 0;
+  const candidateBeat = kind === "bar"
+    ? (Math.floor(previousBeat / range.key.beatsPerBar + 1e-7) + 1) * range.key.beatsPerBar
+    : Math.floor(previousBeat + 1e-7) + 1;
+  if (candidateBeat >= totalBeats || (following && candidateBeat >= following.beat - 1e-7)) {
+    setStatus("该位置后没有可用的节拍编号；请调整总拍数或相邻锚点");
+    return;
+  }
+  const position = kind === "bar" ? candidateBeat / range.key.beatsPerBar : candidateBeat;
+  const anchor = { id: crypto.randomUUID(), kind, position, beat: candidateBeat, time: state.currentTime };
+  const keyId = range.key.id;
+  commitChange(() => {
+    const key = state.chart.timing.bpmKeys.find((candidate) => candidate.id === keyId);
+    if (!key?.ramp) return;
+    key.ramp.beats = totalBeats;
+    key.ramp.anchors.push(anchor);
+  }, kind === "bar" ? "已记录小节线" : "已记录节拍");
+}
+
+$("#add-ramp-beat").addEventListener("click", () => addRampAnchor("beat"));
+$("#add-ramp-bar").addEventListener("click", () => addRampAnchor("bar"));
+
+refs.bpmRampAnchorList.addEventListener("input", (event) => {
+  const item = event.target.closest(".bpm-ramp-anchor");
+  const range = selectedBpmRange();
+  const anchor = range?.key.ramp?.anchors.find((candidate) => candidate.id === item?.dataset.anchorId);
+  const value = inputNumber(event.target);
+  if (!anchor || value === null) return;
+  if (event.target.classList.contains("ramp-anchor-beat")) {
+    applyRampContinuousChange(event.target, `ramp:${range.key.id}:${anchor.id}:beat`, () => {
+      const maxPosition = anchor.kind === "bar"
+        ? Math.max(1, Math.floor((range.key.ramp.beats - 1) / range.key.beatsPerBar))
+        : range.key.ramp.beats - 1;
+      anchor.position = Math.max(1, Math.min(maxPosition, Math.round(value)));
+      anchor.beat = anchor.kind === "bar"
+        ? anchor.position * range.key.beatsPerBar
+        : anchor.position;
+    }, "变速锚点拍数已更新");
+  } else if (event.target.classList.contains("ramp-anchor-time")) {
+    applyRampContinuousChange(event.target, `ramp:${range.key.id}:${anchor.id}:time`, () => {
+      anchor.time = Math.max(range.key.time + 0.001, Math.min(range.next.time - 0.001, value));
+    }, "变速锚点时间已更新");
+  }
+});
+
+refs.bpmRampAnchorList.addEventListener("click", (event) => {
+  const button = event.target.closest(".remove-ramp-anchor");
+  const item = button?.closest(".bpm-ramp-anchor");
+  const range = selectedBpmRange();
+  if (!item || !range?.key.ramp) return;
+  const anchorId = item.dataset.anchorId;
+  commitChange(() => {
+    range.key.ramp.anchors = range.key.ramp.anchors.filter((anchor) => anchor.id !== anchorId);
+  }, "已删除变速锚点");
+});
+
+function repairRampEndpoint(endpoint) {
+  const range = selectedBpmRange();
+  if (!range?.next || !range.key.ramp) return;
+  const anchors = range.key.ramp.anchors;
+  if (anchors.length && !window.confirm("移动端点后，现有关键节拍将不再对应原时间。是否清除这些关键节拍并继续？")) return;
+  const totalBeats = Math.max(1, Math.round(range.key.ramp.beats));
+  const averageBpm = (range.key.bpm + range.next.bpm) * 0.5;
+  const duration = totalBeats * 60 / averageBpm;
+  const startTime = endpoint === "start" ? range.next.time - duration : range.key.time;
+  if (startTime < 0) {
+    setStatus("起点无法再向前移动；请选择移动终点");
+    return;
+  }
+  commitChange(() => {
+    range.key.ramp = { beats: totalBeats, anchors: [] };
+    if (endpoint === "start") {
+      range.key.time = startTime;
+      if (range.index > 0) delete state.chart.timing.bpmKeys[range.index - 1].ramp;
+    } else {
+      range.next.time = range.key.time + duration;
+      delete range.next.ramp;
+      state.chart.timing.duration = Math.max(state.chart.timing.duration, range.next.time);
+    }
+  }, endpoint === "start" ? "已移动变速起点至整数拍" : "已移动变速终点至整数拍");
+}
+
+refs.repairRampStart.addEventListener("click", () => repairRampEndpoint("start"));
+refs.repairRampEnd.addEventListener("click", () => repairRampEndpoint("end"));
+
 document.addEventListener("focusout", (event) => {
   if (state.continuousEdit?.control !== event.target) return;
   state.continuousEdit = null;
-  if (refs.bpmKeyEditor.contains(event.target)) renderBpmKeys();
+  if (refs.bpmKeyEditor.contains(event.target) || refs.bpmRampEditor.contains(event.target)) renderBpmKeys();
   else if (refs.noteInspector.contains(event.target) || refs.eventInspector.contains(event.target)) renderInspector();
 });
 

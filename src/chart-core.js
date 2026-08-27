@@ -1,4 +1,4 @@
-import { CONFIG } from "./config.js?v=20260827-44";
+import { CONFIG } from "./config.js?v=20260828-56";
 
 const chartConfig = CONFIG.chart;
 const chartDefaults = chartConfig.defaults;
@@ -14,6 +14,7 @@ const NOTE_TYPE_CODES = chartConfig.noteTypeCodes;
 const NOTE_TYPE_NAMES = Object.freeze(
   Object.fromEntries(Object.entries(NOTE_TYPE_CODES).map(([name, code]) => [code, name]))
 );
+const PLACEMENT_PRECISION = 1e6;
 
 export const TIMELINE_DEFINITIONS = chartConfig.timelineDefinitions;
 
@@ -70,6 +71,10 @@ function finite(value, fallback) {
   return Number.isFinite(number) ? number : fallback;
 }
 
+function placementNumberKey(value) {
+  return Math.round(finite(value, 0) * PLACEMENT_PRECISION);
+}
+
 function normalizeDifficultyLabel(value) {
   const fallback = chartDefaults.meta.difficultyLabel;
   const label = String(value ?? fallback).trim().replace(/^-+|-+$/g, "").trim();
@@ -79,6 +84,44 @@ function normalizeDifficultyLabel(value) {
 function normalizeNoteType(type) {
   if (NOTE_TYPE_NAMES[type]) return NOTE_TYPE_NAMES[type];
   return Object.hasOwn(NOTE_TYPE_CODES, type) ? type : "middle";
+}
+
+// Non-middle lanes have an implicit fixed wPos, represented by their lane type.
+export function notePlacementKey(note) {
+  const type = normalizeNoteType(note.type);
+  const lanePosition = type === "middle"
+    ? `middle:${placementNumberKey(note.wPos ?? note.localX)}`
+    : type;
+  return `${placementNumberKey(note.hitTime ?? note.time)}:${lanePosition}`;
+}
+
+export function findDuplicateNotePlacement(notes = []) {
+  const seen = new Map();
+  for (const note of notes) {
+    const key = notePlacementKey(note);
+    if (seen.has(key)) return { first: seen.get(key), duplicate: note };
+    seen.set(key, note);
+  }
+  return null;
+}
+
+export function findDuplicateTimelineEvent(timelines = {}) {
+  for (const definition of TIMELINE_DEFINITIONS) {
+    const seen = new Map();
+    for (const event of timelines[definition.id] ?? []) {
+      const key = `${placementNumberKey(event.time)}:${placementNumberKey(event.value)}`;
+      if (seen.has(key)) {
+        return {
+          timelineId: definition.id,
+          label: definition.label,
+          first: seen.get(key),
+          duplicate: event
+        };
+      }
+      seen.set(key, event);
+    }
+  }
+  return null;
 }
 
 function normalizeEvent(event, fallbackValue) {
@@ -109,7 +152,8 @@ export function normalizeChart(source = {}) {
       id: key.id ?? crypto.randomUUID(),
       time: Math.max(0, finite(key.time ?? key.startTime, 0)),
       bpm: Math.max(1, finite(key.bpm, chartDefaults.timing.bpm)),
-      beatsPerBar: Math.max(1, finite(key.beatsPerBar ?? key.timeSignature, chartDefaults.timing.beatsPerBar))
+      beatsPerBar: Math.max(1, finite(key.beatsPerBar ?? key.timeSignature, chartDefaults.timing.beatsPerBar)),
+      ...(key.ramp ? { ramp: structuredClone(key.ramp) } : {})
     }))
     .sort((a, b) => a.time - b.time);
   if (chart.timing.bpmKeys.length === 0) chart.timing.bpmKeys.push({
@@ -117,6 +161,50 @@ export function normalizeChart(source = {}) {
     time: 0,
     bpm: chartDefaults.timing.bpm,
     beatsPerBar: chartDefaults.timing.beatsPerBar
+  });
+  chart.timing.bpmKeys.forEach((key, index) => {
+    const next = chart.timing.bpmKeys[index + 1];
+    if (!next || !key.ramp) {
+      delete key.ramp;
+      return;
+    }
+    const duration = Math.max(0.001, next.time - key.time);
+    const estimatedBeats = duration * (key.bpm + next.bpm) / 120;
+    const beats = Math.max(1, Math.round(finite(key.ramp.beats, estimatedBeats)));
+    const anchors = (key.ramp.anchors ?? [])
+      .map((anchor) => {
+        const arrayAnchor = Array.isArray(anchor);
+        const rawPosition = finite(arrayAnchor
+          ? anchor[0]
+          : anchor.position ?? anchor.bar ?? anchor.beat ?? anchor.beatOffset, NaN);
+        const rawKind = arrayAnchor ? anchor[2] : anchor.kind;
+        const legacyBeat = Math.round(rawPosition);
+        const kind = rawKind === "b" || rawKind === "bar"
+          ? "bar"
+          : rawKind === "t" || rawKind === "beat"
+            ? "beat"
+            : legacyBeat > 0 && legacyBeat % key.beatsPerBar === 0
+              ? "bar"
+              : "beat";
+        const position = kind === "bar" && rawKind == null
+          ? Math.round(rawPosition / key.beatsPerBar)
+          : Math.round(rawPosition);
+        return {
+          id: arrayAnchor ? crypto.randomUUID() : anchor.id ?? crypto.randomUUID(),
+          kind,
+          position,
+          beat: kind === "bar" ? position * key.beatsPerBar : position,
+          time: finite(arrayAnchor ? anchor[1] : anchor.time, NaN)
+        };
+      })
+      .filter((anchor) => Number.isFinite(anchor.beat) && Number.isFinite(anchor.time))
+      .filter((anchor) => anchor.beat > 0 && anchor.beat < beats && anchor.time > key.time && anchor.time < next.time)
+      .sort((left, right) => left.beat - right.beat || left.time - right.time)
+      .filter((anchor, anchorIndex, all) => (
+        anchorIndex === 0
+        || (anchor.beat > all[anchorIndex - 1].beat && anchor.time > all[anchorIndex - 1].time)
+      ));
+    key.ramp = { beats, anchors };
   });
   chart.playfield = { ...defaults.playfield, ...(chart.playfield ?? {}) };
   chart.playfield.receiverRadius = Math.max(0.1, finite(chart.playfield.receiverRadius, chartDefaults.playfield.receiverRadius));
@@ -139,6 +227,7 @@ export function normalizeChart(source = {}) {
     }
   });
 
+  const seenNotePlacements = new Set();
   chart.notes = (chart.notes ?? []).map((note) => {
     const hitTime = Math.max(0, finite(note.hitTime ?? note.time, 0));
     const kind = note.kind === "hold" || note.endTime > hitTime ? "hold" : "tap";
@@ -152,6 +241,11 @@ export function normalizeChart(source = {}) {
       ...(kind === "hold" ? { endTime: Math.max(hitTime + 0.001, finite(note.endTime, hitTime + 1)) } : {}),
       wPos: type === "middle" ? Math.max(-1, Math.min(1, finite(note.wPos ?? note.localX, 0))) : 0
     };
+  }).filter((note) => {
+    const key = notePlacementKey(note);
+    if (seenNotePlacements.has(key)) return false;
+    seenNotePlacements.add(key);
+    return true;
   }).sort((a, b) => a.hitTime - b.hitTime || (a.wPos ?? 0) - (b.wPos ?? 0));
   chart.effects = Array.isArray(chart.effects) ? chart.effects : [];
   return chart;
@@ -190,7 +284,19 @@ export function compactChart(chart) {
     bpmKeys: normalized.timing.bpmKeys.map((key) => ({
       ...(key.time !== 0 ? { time: key.time } : {}),
       bpm: key.bpm,
-      ...(key.beatsPerBar !== chartDefaults.timing.beatsPerBar ? { beatsPerBar: key.beatsPerBar } : {})
+      ...(key.beatsPerBar !== chartDefaults.timing.beatsPerBar ? { beatsPerBar: key.beatsPerBar } : {}),
+      ...(key.ramp ? {
+        ramp: {
+          beats: key.ramp.beats,
+          ...(key.ramp.anchors.length
+            ? { anchors: key.ramp.anchors.map((anchor) => [
+              anchor.position,
+              anchor.time,
+              anchor.kind === "bar" ? "b" : "t"
+            ]) }
+            : {})
+        }
+      } : {})
     })),
     ...(normalized.timing.offset !== 0 ? { offset: normalized.timing.offset } : {}),
     ...(normalized.timing.subdivision !== defaults.timing.subdivision
@@ -244,14 +350,268 @@ export function bpmKeyAt(chart, time) {
   return current;
 }
 
-export function snapTime(chart, time) {
+const tempoEpsilon = 1e-8;
+const approximately = (left, right) => Math.abs(left - right) <= tempoEpsilon * Math.max(1, Math.abs(left), Math.abs(right));
+
+function makeConstantTempoSegment(start, end, rate, keyIndex) {
+  const duration = Math.max(0.000001, end.time - start.time);
+  return {
+    startTime: start.time,
+    endTime: end.time,
+    startBeat: start.beat,
+    endBeat: start.beat + rate * duration,
+    startRate: rate,
+    endRate: rate,
+    averageRate: rate,
+    mode: "constant",
+    power: 1,
+    keyIndex,
+    ramp: false
+  };
+}
+
+function solveRamp(points, startRate, endRate) {
+  const averages = points.slice(0, -1).map((point, index) => (
+    (points[index + 1].beat - point.beat) / Math.max(0.000001, points[index + 1].time - point.time)
+  ));
+  const direction = Math.sign(endRate - startRate);
+  const orderedRates = [startRate, ...averages, endRate];
+  const ordered = orderedRates.every((rate, index) => (
+    index === 0
+    || (direction > 0
+      ? rate >= orderedRates[index - 1] - tempoEpsilon
+      : direction < 0
+        ? rate <= orderedRates[index - 1] + tempoEpsilon
+        : approximately(rate, orderedRates[index - 1]))
+  ));
+  if (!ordered) {
+    return {
+      valid: false,
+      averages,
+      reason: direction === 0
+        ? "首尾 BPM 相同，但区间拍数与时长不对应恒定 BPM"
+        : "关键节拍要求的平均 BPM 不符合首尾 BPM 的单调方向"
+    };
+  }
+
+  const rates = new Array(points.length);
+  rates[0] = startRate;
+  rates[rates.length - 1] = endRate;
+  for (let index = 1; index < rates.length - 1; index += 1) {
+    rates[index] = (averages[index - 1] + averages[index]) * 0.5;
+  }
+  for (let pass = 0; pass < rates.length * 2; pass += 1) {
+    averages.forEach((average, index) => {
+      if (approximately(average, rates[index]) && index + 1 < rates.length - 1) rates[index + 1] = average;
+      if (approximately(average, rates[index + 1]) && index > 0) rates[index] = average;
+    });
+  }
+  const feasibleBoundaries = averages.every((average, index) => {
+    const low = Math.min(rates[index], rates[index + 1]);
+    const high = Math.max(rates[index], rates[index + 1]);
+    if (average < low - tempoEpsilon || average > high + tempoEpsilon) return false;
+    if (approximately(average, low) || approximately(average, high)) {
+      return approximately(rates[index], rates[index + 1]);
+    }
+    return true;
+  });
+  return feasibleBoundaries
+    ? { valid: true, averages, rates, direction }
+    : { valid: false, averages, reason: "锚点在连续单调 BPM 下没有可行解" };
+}
+
+function makeMonotoneTempoSegment(start, end, startRate, endRate, averageRate, keyIndex) {
+  const duration = Math.max(0.000001, end.time - start.time);
+  if (approximately(startRate, endRate)) {
+    return makeConstantTempoSegment(start, end, startRate, keyIndex);
+  }
+  const direction = Math.sign(endRate - startRate);
+  const transformedStart = startRate * direction;
+  const transformedEnd = endRate * direction;
+  const transformedAverage = averageRate * direction;
+  const delta = transformedEnd - transformedStart;
+  const midpoint = (transformedStart + transformedEnd) * 0.5;
+  const mode = transformedAverage <= midpoint ? "powerIn" : "powerOut";
+  const denominator = mode === "powerIn"
+    ? transformedAverage - transformedStart
+    : transformedEnd - transformedAverage;
+  const power = Math.max(1, delta / Math.max(tempoEpsilon, denominator) - 1);
+  return {
+    startTime: start.time,
+    endTime: end.time,
+    startBeat: start.beat,
+    endBeat: start.beat + averageRate * duration,
+    startRate,
+    endRate,
+    averageRate,
+    direction,
+    mode,
+    power,
+    keyIndex,
+    ramp: true
+  };
+}
+
+function tempoSegmentRate(segment, progress) {
+  const u = Math.max(0, Math.min(1, progress));
+  if (segment.mode === "constant") return segment.startRate;
+  const transformedStart = segment.startRate * segment.direction;
+  const transformedEnd = segment.endRate * segment.direction;
+  const delta = transformedEnd - transformedStart;
+  const transformedRate = segment.mode === "powerIn"
+    ? transformedStart + delta * u ** segment.power
+    : transformedEnd - delta * (1 - u) ** segment.power;
+  return transformedRate * segment.direction;
+}
+
+function tempoSegmentBeat(segment, progress) {
+  const u = Math.max(0, Math.min(1, progress));
+  const duration = segment.endTime - segment.startTime;
+  if (segment.mode === "constant") return segment.startBeat + segment.startRate * duration * u;
+  const transformedStart = segment.startRate * segment.direction;
+  const transformedEnd = segment.endRate * segment.direction;
+  const delta = transformedEnd - transformedStart;
+  const transformedIntegral = segment.mode === "powerIn"
+    ? transformedStart * u + delta * u ** (segment.power + 1) / (segment.power + 1)
+    : transformedEnd * u - delta * (1 - (1 - u) ** (segment.power + 1)) / (segment.power + 1);
+  return segment.startBeat + duration * transformedIntegral * segment.direction;
+}
+
+export function buildTempoMap(chart) {
+  const keys = chart.timing.bpmKeys;
+  const duration = chart.timing.duration;
+  const segments = [];
+  const issues = [];
+  const keyBeats = new Array(keys.length).fill(0);
+  let currentBeat = 0;
+
+  if (keys[0].time > 0) {
+    const rate = keys[0].bpm / 60;
+    segments.push(makeConstantTempoSegment(
+      { time: 0, beat: 0 },
+      { time: keys[0].time, beat: keys[0].time * rate },
+      rate,
+      0
+    ));
+    currentBeat = keys[0].time * rate;
+  }
+
+  keys.forEach((key, index) => {
+    keyBeats[index] = currentBeat;
+    const next = keys[index + 1];
+    const endTime = Math.min(duration, next?.time ?? duration);
+    if (endTime <= key.time) return;
+    if (key.ramp && next) {
+      const points = [
+        { time: key.time, beat: currentBeat },
+        ...key.ramp.anchors.map((anchor) => ({ time: anchor.time, beat: currentBeat + anchor.beat })),
+        { time: next.time, beat: currentBeat + key.ramp.beats }
+      ];
+      const solution = solveRamp(points, key.bpm / 60, next.bpm / 60);
+      if (solution.valid) {
+        for (let pointIndex = 0; pointIndex < points.length - 1; pointIndex += 1) {
+          segments.push(makeMonotoneTempoSegment(
+            points[pointIndex],
+            points[pointIndex + 1],
+            solution.rates[pointIndex],
+            solution.rates[pointIndex + 1],
+            solution.averages[pointIndex],
+            index
+          ));
+        }
+        currentBeat += key.ramp.beats;
+      } else {
+        const fallbackAverage = (key.bpm + next.bpm) / 120;
+        const fallbackEnd = {
+          time: next.time,
+          beat: currentBeat + fallbackAverage * (next.time - key.time)
+        };
+        segments.push(makeMonotoneTempoSegment(
+          points[0], fallbackEnd, key.bpm / 60, next.bpm / 60, fallbackAverage, index
+        ));
+        currentBeat = fallbackEnd.beat;
+        issues.push({ keyIndex: index, reason: solution.reason });
+      }
+    } else {
+      const rate = key.bpm / 60;
+      const endBeat = currentBeat + (endTime - key.time) * rate;
+      segments.push(makeConstantTempoSegment(
+        { time: key.time, beat: currentBeat },
+        { time: endTime, beat: endBeat },
+        rate,
+        index
+      ));
+      currentBeat = endBeat;
+    }
+  });
+
+  return { segments, keyBeats, totalBeats: currentBeat, issues };
+}
+
+function tempoSegmentAtTime(map, time) {
+  const clamped = Math.max(0, time);
+  let low = 0;
+  let high = map.segments.length - 1;
+  while (low < high) {
+    const middle = (low + high) >> 1;
+    if (map.segments[middle].endTime <= clamped) low = middle + 1;
+    else high = middle;
+  }
+  return map.segments[low];
+}
+
+function tempoSegmentAtBeat(map, beat) {
+  const clamped = Math.max(0, beat);
+  let low = 0;
+  let high = map.segments.length - 1;
+  while (low < high) {
+    const middle = (low + high) >> 1;
+    if (map.segments[middle].endBeat <= clamped) low = middle + 1;
+    else high = middle;
+  }
+  return map.segments[low];
+}
+
+export function bpmAt(chart, time, tempoMap = buildTempoMap(chart)) {
+  const segment = tempoSegmentAtTime(tempoMap, time);
+  if (!segment) return bpmKeyAt(chart, time)?.bpm ?? chartDefaults.timing.bpm;
+  const progress = (Math.max(segment.startTime, Math.min(segment.endTime, time)) - segment.startTime)
+    / Math.max(0.000001, segment.endTime - segment.startTime);
+  return tempoSegmentRate(segment, progress) * 60;
+}
+
+export function beatAt(chart, time, tempoMap = buildTempoMap(chart)) {
+  const segment = tempoSegmentAtTime(tempoMap, time);
+  if (!segment) return 0;
+  const progress = (Math.max(segment.startTime, Math.min(segment.endTime, time)) - segment.startTime)
+    / Math.max(0.000001, segment.endTime - segment.startTime);
+  return tempoSegmentBeat(segment, progress);
+}
+
+export function timeAtBeat(chart, beat, tempoMap = buildTempoMap(chart)) {
+  const segment = tempoSegmentAtBeat(tempoMap, beat);
+  if (!segment) return 0;
+  const target = Math.max(segment.startBeat, Math.min(segment.endBeat, beat));
+  if (!segment.ramp) return segment.startTime + (target - segment.startBeat) / segment.startRate;
+  let low = 0;
+  let high = 1;
+  for (let iteration = 0; iteration < 48; iteration += 1) {
+    const middle = (low + high) * 0.5;
+    if (tempoSegmentBeat(segment, middle) < target) low = middle;
+    else high = middle;
+  }
+  return segment.startTime + (segment.endTime - segment.startTime) * (low + high) * 0.5;
+}
+
+export function snapTime(chart, time, tempoMap = buildTempoMap(chart)) {
   const clamped = Math.max(0, Math.min(chart.timing.duration, finite(time, 0)));
   if (chart.timing.subdivision === 0) return clamped;
   const key = bpmKeyAt(chart, clamped);
-  const barDuration = (60 / key.bpm) * key.beatsPerBar;
-  const subdivisionDuration = barDuration / chart.timing.subdivision;
-  const subdivision = Math.round((clamped - key.time) / subdivisionDuration);
-  return Math.max(0, Math.min(chart.timing.duration, key.time + subdivision * subdivisionDuration));
+  const keyIndex = chart.timing.bpmKeys.indexOf(key);
+  const keyBeat = tempoMap.keyBeats[keyIndex] ?? 0;
+  const beatStep = key.beatsPerBar / chart.timing.subdivision;
+  const subdivision = Math.round((beatAt(chart, clamped, tempoMap) - keyBeat) / beatStep);
+  return Math.max(0, Math.min(chart.timing.duration, timeAtBeat(chart, keyBeat + subdivision * beatStep, tempoMap)));
 }
 
 export function snapWPos(chart, value) {
@@ -536,22 +896,33 @@ export function speedColor(speed, minSpeed, maxSpeed) {
   return low.map((value, index) => (value + (high[index] - value) * t) / 255);
 }
 
-export function gridTimes(chart, start = 0, end = chart.timing.duration) {
+export function gridTimes(chart, start = 0, end = chart.timing.duration, tempoMap = buildTempoMap(chart)) {
   const times = [];
   if (chart.timing.subdivision === 0) return times;
   const keys = chart.timing.bpmKeys;
   for (let index = 0; index < keys.length; index += 1) {
     const key = keys[index];
     const segmentEnd = Math.min(end, keys[index + 1]?.time ?? chart.timing.duration);
-    const barDuration = (60 / key.bpm) * key.beatsPerBar;
-    const step = barDuration / chart.timing.subdivision;
-    let subdivision = Math.max(0, Math.ceil((start - key.time) / step));
-    for (let time = key.time + subdivision * step; time <= segmentEnd + 0.0001; time += step, subdivision += 1) {
-      if (time < start - 0.0001) continue;
+    if (segmentEnd < start || key.time > end) continue;
+    const keyBeat = tempoMap.keyBeats[index] ?? beatAt(chart, key.time, tempoMap);
+    const beatStep = key.beatsPerBar / chart.timing.subdivision;
+    const visibleStartBeat = beatAt(chart, Math.max(start, key.time), tempoMap);
+    const segmentEndBeat = beatAt(chart, segmentEnd, tempoMap);
+    let subdivision = Math.max(0, Math.ceil((visibleStartBeat - keyBeat - 1e-9) / beatStep));
+    const includesEnd = index === keys.length - 1;
+    for (
+      let targetBeat = keyBeat + subdivision * beatStep;
+      includesEnd ? targetBeat <= segmentEndBeat + 1e-9 : targetBeat < segmentEndBeat - 1e-9;
+      subdivision += 1, targetBeat = keyBeat + subdivision * beatStep
+    ) {
+      const time = timeAtBeat(chart, targetBeat, tempoMap);
+      if (time < start - 0.0001 || time > end + 0.0001) continue;
+      if (times.length && Math.abs(times[times.length - 1].time - time) < 0.000001) continue;
+      const localBeat = targetBeat - keyBeat;
       times.push({
         time,
-        major: subdivision % chart.timing.subdivision === 0,
-        beat: subdivision % Math.max(1, Math.round(chart.timing.subdivision / key.beatsPerBar)) === 0
+        major: Math.abs(localBeat / key.beatsPerBar - Math.round(localBeat / key.beatsPerBar)) < 1e-7,
+        beat: Math.abs(localBeat - Math.round(localBeat)) < 1e-7
       });
     }
   }

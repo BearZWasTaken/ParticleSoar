@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>ParticleSoar Chart Editor</title>
-  <link rel="stylesheet" href="./editor.css?v=20260827-44">
+  <link rel="stylesheet" href="./editor.css?v=20260828-56">
   <script type="importmap">
   {
     "imports": {
@@ -18,7 +18,7 @@
   <div class="editor-shell editor-panel-collapsed">
     <section class="preview-stage" aria-label="3D trajectory preview">
       <canvas id="preview-canvas" hidden></canvas>
-      <iframe id="game-preview" src="./index.html?editorPreview=1&v=20260827-44" title="游玩场景预览"></iframe>
+      <iframe id="game-preview" src="./index.html?editorPreview=1&v=20260828-56" title="游玩场景预览"></iframe>
       <div class="preview-state">
         <span id="dirty-state">已保存</span>
         <button id="view-toggle" type="button" title="切换自由/游玩视角"><strong id="view-mode">FREE</strong></button>
@@ -172,6 +172,29 @@
             <label>BPM<input id="bpm-value" type="number" min="1" step="0.01"></label>
             <label>每小节拍数<input id="bpm-beats-per-bar" type="number" min="1" step="1"></label>
           </form>
+          <section id="bpm-ramp-editor" class="bpm-ramp-editor" hidden>
+            <div class="bpm-ramp-heading">
+              <div><strong>到下一个 BpmKey</strong><span id="bpm-ramp-range"></span></div>
+              <button id="toggle-bpm-ramp" type="button">创建变速</button>
+            </div>
+            <div id="bpm-ramp-controls" hidden>
+              <label>总拍数<input id="bpm-ramp-beats" type="number" min="1" step="1"></label>
+              <div class="bpm-ramp-actions">
+                <button id="add-ramp-beat" type="button">此处打节拍</button>
+                <button id="add-ramp-bar" type="button">此处打小节</button>
+              </div>
+              <div id="bpm-ramp-repair" class="bpm-ramp-repair" hidden>
+                <strong>当前条件无法形成单调变速</strong>
+                <div>
+                  <button id="repair-ramp-start" type="button">移动起点至整数拍</button>
+                  <button id="repair-ramp-end" type="button">移动终点至整数拍</button>
+                </div>
+              </div>
+              <svg id="bpm-ramp-curve" viewBox="0 0 300 84" preserveAspectRatio="none" aria-label="BPM 变速曲线"></svg>
+              <output id="bpm-ramp-status"></output>
+              <div id="bpm-ramp-anchor-list"></div>
+            </div>
+          </section>
           <div class="grid-settings">
             <strong>编辑网格</strong>
             <label>节拍细分<input id="subdivision" type="number" min="0" step="1" value="4"></label>
@@ -222,6 +245,6 @@
   <input id="jacket-file-input" type="file" accept="image/*" hidden>
   <audio id="audio-player" preload="auto"></audio>
 
-  <script type="module" src="./src/editor.js?v=20260827-44"></script>
+  <script type="module" src="./src/editor.js?v=20260828-56"></script>
 </body>
 </html>

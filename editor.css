@@ -874,10 +874,131 @@ label {
 }
 
 .bpm-key-editor label,
+.bpm-ramp-editor label,
 .grid-settings label {
   display: grid;
   grid-template-columns: 82px minmax(0, 1fr);
   align-items: center;
+}
+
+.bpm-ramp-editor {
+  margin-top: 9px;
+  padding-top: 9px;
+  border-top: 1px solid var(--line-soft);
+}
+
+.bpm-ramp-heading,
+.bpm-ramp-actions,
+.bpm-ramp-anchor {
+  display: flex;
+  align-items: center;
+}
+
+.bpm-ramp-heading {
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.bpm-ramp-heading > div {
+  display: grid;
+  min-width: 0;
+}
+
+.bpm-ramp-heading span,
+#bpm-ramp-status,
+.bpm-ramp-anchor small {
+  color: var(--muted);
+  font-size: 10px;
+}
+
+#bpm-ramp-status.warning {
+  color: #ff9d86;
+}
+
+#bpm-ramp-controls {
+  display: grid;
+  margin-top: 8px;
+  gap: 7px;
+}
+
+#bpm-ramp-controls[hidden] {
+  display: none;
+}
+
+.bpm-ramp-actions {
+  gap: 5px;
+}
+
+.bpm-ramp-actions button {
+  flex: 1;
+}
+
+.bpm-ramp-repair {
+  display: grid;
+  gap: 6px;
+  padding: 8px;
+  border-left: 2px solid #ff725f;
+  background: rgba(255, 92, 72, 0.08);
+  color: #ffb2a3;
+  font-size: 11px;
+}
+
+.bpm-ramp-repair[hidden] {
+  display: none;
+}
+
+.bpm-ramp-repair > div {
+  display: flex;
+  gap: 5px;
+}
+
+.bpm-ramp-repair button {
+  flex: 1;
+}
+
+#bpm-ramp-curve {
+  width: 100%;
+  height: 84px;
+  overflow: visible;
+  border-block: 1px solid var(--line-soft);
+  background: rgba(8, 11, 15, 0.55);
+}
+
+#bpm-ramp-curve .ramp-grid {
+  stroke: rgba(255, 255, 255, 0.09);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+
+#bpm-ramp-curve .ramp-path {
+  fill: none;
+  stroke: var(--gold);
+  stroke-width: 2;
+  vector-effect: non-scaling-stroke;
+}
+
+#bpm-ramp-curve .ramp-anchor {
+  fill: #0c1117;
+  stroke: #ffffff;
+  stroke-width: 1.5;
+  vector-effect: non-scaling-stroke;
+}
+
+.bpm-ramp-anchor {
+  display: grid;
+  grid-template-columns: 42px minmax(0, 1fr) minmax(0, 1fr) 25px;
+  gap: 5px;
+  margin-top: 5px;
+}
+
+.bpm-ramp-anchor input {
+  min-width: 0;
+}
+
+.bpm-ramp-anchor button {
+  width: 25px;
+  min-height: 25px;
+  padding: 0;
 }
 
 .grid-settings {

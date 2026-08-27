@@ -106,7 +106,7 @@ export const CONFIG = deepFreeze({
       exposure: 1.08
     },
     scene: {
-      fogDensity: 0.035
+      fogDensity: 0.015
     },
     camera: {
       fov: 44,
@@ -151,7 +151,17 @@ export const CONFIG = deepFreeze({
       multiHitLineWidth: 0.0315,
       constellationLineOpacity: 0.12,
       multiHitLineOpacity: 0.34,
-      middleHaloScale: 1.62
+      middleHaloScale: 1.62,
+      foregroundFogMaxFactor: 0.35,
+      noteGlowIntensity: 0.2,
+      noteSoftHaloOpacity: 0.2,
+      receiverGlowOpacity: 0.5,
+      receiverGlowIntensity: 1.2,
+      receiverParticleMaterialOpacity: 0.32,
+      receiverParticleBaseOpacity: 0.28,
+      hitGlowIntensity: 1.2,
+      hitParticleBaseOpacity: 0.45,
+      hitParticleOpacityRange: 0.18
     },
     background: {
       cellSize: 12,
@@ -162,6 +172,8 @@ export const CONFIG = deepFreeze({
       triangleChance: 0.52,
       maxPoints: 65000,
       maxTriangles: 5000,
+      pointOpacity: 0.3,
+      triangleOpacity: 0.21,
       nearFadeStart: 16,
       nearFadeEnd: 24,
       playfieldClearDepthFeather: 2

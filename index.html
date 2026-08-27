@@ -55,8 +55,8 @@ import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js"
 import { Line2 } from "three/addons/lines/Line2.js";
 import { LineGeometry } from "three/addons/lines/LineGeometry.js";
 import { LineMaterial } from "three/addons/lines/LineMaterial.js";
-import { CHART_FORMAT, chartForGame } from "./src/chart-core.js?v=20260827-44";
-import { CONFIG } from "./src/config.js?v=20260827-44";
+import { CHART_FORMAT, chartForGame } from "./src/chart-core.js?v=20260828-56";
+import { CONFIG } from "./src/config.js?v=20260828-56";
 
 const gameConfig = CONFIG.game;
 const colorConfig = CONFIG.colors;
@@ -128,11 +128,24 @@ function applyCameraProfile(
   orientation = new THREE.Quaternion(),
   offset = {}
 ) {
-  camera.fov = cameraProfile.fov;
+  const pose = resolveCameraProfile(t, bob, anchor, orientation, offset);
+  camera.fov = pose.fov;
   camera.near = cameraProfile.near;
   camera.far = cameraProfile.far;
-  if (offset.fov) camera.fov += offset.fov;
+  camera.position.copy(pose.position);
+  camera.up.copy(pose.up);
+  camera.lookAt(pose.target);
+  camera.updateProjectionMatrix();
+  return pose.target;
+}
 
+function resolveCameraProfile(
+  t = 0,
+  bob = 0,
+  anchor = new THREE.Vector3(),
+  orientation = new THREE.Quaternion(),
+  offset = {}
+) {
   const localPosition = cameraProfile.position.clone().add(new THREE.Vector3(
     (offset.x ?? 0) + Math.sin(t * 0.16) * cameraProfile.swayX,
     (offset.y ?? 0) + bob * cameraProfile.bobY,
@@ -151,12 +164,12 @@ function applyCameraProfile(
     : localTarget;
   const worldPosition = anchor.clone().add(followPosition.applyQuaternion(orientation));
   const worldTarget = anchor.clone().add(followTarget.applyQuaternion(orientation));
-
-  camera.position.copy(worldPosition);
-  camera.up.set(0, 1, 0).applyQuaternion(orientation).normalize();
-  camera.lookAt(worldTarget);
-  camera.updateProjectionMatrix();
-  return worldTarget;
+  return {
+    position: worldPosition,
+    target: worldTarget,
+    up: new THREE.Vector3(0, 1, 0).applyQuaternion(orientation).normalize(),
+    fov: cameraProfile.fov + (offset.fov ?? 0)
+  };
 }
 
 applyCameraProfile();
@@ -186,7 +199,42 @@ const notesRoot = new THREE.Group();
 const particlesRoot = new THREE.Group();
 const editorRouteRoot = new THREE.Group();
 editorRouteRoot.visible = false;
-scene.add(notesRoot, particlesRoot, editorRouteRoot);
+const editorCameraGuideRoot = new THREE.Group();
+editorCameraGuideRoot.visible = false;
+const editorPlayCamera = new THREE.PerspectiveCamera(
+  cameraProfile.fov,
+  window.innerWidth / window.innerHeight,
+  0.35,
+  28
+);
+const editorCameraHelper = new THREE.CameraHelper(editorPlayCamera);
+editorCameraHelper.traverse((object) => {
+  if (!object.material) return;
+  object.material.depthTest = false;
+  object.material.transparent = true;
+  object.material.opacity = 0.82;
+  object.material.fog = false;
+});
+const editorCameraMarker = new THREE.Mesh(
+  new THREE.SphereGeometry(0.48, 18, 12),
+  new THREE.MeshBasicMaterial({ color: 0xffd66b, fog: false, depthTest: false })
+);
+const editorCameraDirection = new THREE.ArrowHelper(
+  new THREE.Vector3(0, 0, -1),
+  new THREE.Vector3(),
+  8,
+  0xffd66b,
+  1.1,
+  0.62
+);
+editorCameraDirection.traverse((object) => {
+  if (object.material) {
+    object.material.depthTest = false;
+    object.material.fog = false;
+  }
+});
+editorCameraGuideRoot.add(editorCameraHelper, editorCameraMarker, editorCameraDirection);
+scene.add(notesRoot, particlesRoot, editorRouteRoot, editorCameraGuideRoot);
 const editorRouteMaterials = new Set();
 const editorRouteBounds = new THREE.Sphere(new THREE.Vector3(), 1);
 let editorPreviewView = "play";
@@ -231,21 +279,54 @@ const palette = {
   right: new THREE.Color(colorConfig.right)
 };
 
-function makeGlowMaterial(color, opacity = 1) {
+function makeGlowMaterial(color, opacity = 1, { fog = false } = {}) {
   return new THREE.MeshBasicMaterial({
     color,
     transparent: opacity < 1,
     opacity,
     blending: THREE.AdditiveBlending,
     depthWrite: false,
-    side: THREE.DoubleSide
+    side: THREE.DoubleSide,
+    fog
   });
 }
 
-function makeHotGlowMaterial(color, opacity = 1, intensity = 1) {
-  const material = makeGlowMaterial(color, opacity);
+function makeHotGlowMaterial(color, opacity = 1, intensity = 1, options = {}) {
+  const material = makeGlowMaterial(color, opacity, options);
   material.color.multiplyScalar(intensity);
   return material;
+}
+
+function installReadableForegroundFog(material) {
+  material.fog = true;
+  material.onBeforeCompile = (shader) => {
+    shader.uniforms.foregroundFogMaxFactor = { value: gameConfig.rendering.foregroundFogMaxFactor };
+    shader.fragmentShader = `uniform float foregroundFogMaxFactor;\n${shader.fragmentShader}`
+      .replace(
+        "#include <fog_fragment>",
+        `
+          #ifdef USE_FOG
+            #ifdef FOG_EXP2
+              float fogFactor = 1.0 - exp(-fogDensity * fogDensity * vFogDepth * vFogDepth);
+            #else
+              float fogFactor = smoothstep(fogNear, fogFar, vFogDepth);
+            #endif
+            fogFactor = min(fogFactor, foregroundFogMaxFactor);
+            gl_FragColor.rgb = mix(gl_FragColor.rgb, fogColor, fogFactor);
+          #endif
+        `
+      );
+  };
+  material.customProgramCacheKey = () => "readable-foreground-fog-v1";
+  return material;
+}
+
+function makeForegroundGlowMaterial(color, opacity = 1, intensity = 1) {
+  return installReadableForegroundFog(makeHotGlowMaterial(color, opacity, intensity));
+}
+
+function makeNoteGlowMaterial(color, opacity = 1, intensity = 1) {
+  return makeForegroundGlowMaterial(color, opacity, intensity * gameConfig.rendering.noteGlowIntensity);
 }
 
 function makeSoftHaloTexture() {
@@ -294,8 +375,8 @@ function makeGradientLineMaterial() {
   });
 }
 
-const matMiddle = makeHotGlowMaterial(palette.white, 0.99, 2.18);
-const matSpace = makeHotGlowMaterial(palette.space, 0.99, 2.18);
+const matMiddle = makeNoteGlowMaterial(palette.white, 0.99, 2.18);
+const matSpace = makeNoteGlowMaterial(palette.space, 0.99, 2.18);
 
 const backgroundConfig = gameConfig.background;
 const sideTrajectoryPointCount = gameConfig.sideRails.pointCount;
@@ -405,7 +486,7 @@ function makeBackgroundPointMaterial() {
       color: 0xb9e8ff,
       size: 0.082,
       transparent: true,
-      opacity: 0.40,
+      opacity: backgroundConfig.pointOpacity,
       blending: THREE.AdditiveBlending,
       depthWrite: false
     }),
@@ -435,7 +516,7 @@ function makeHollowEquilateralTriangleGeometry(side = 1.65, thicknessRatio = 0.3
 
 function makeBackgroundTriangleMaterial() {
   return installBackgroundOcclusionShader(
-    makeHotGlowMaterial(0xe8f3f7, 0.28, 1.55),
+    makeHotGlowMaterial(0xe8f3f7, backgroundConfig.triangleOpacity, 1.55, { fog: true }),
     "background-triangle-trajectory-volume-v7"
   );
 }
@@ -457,8 +538,20 @@ const backgroundInstanceMatrix = new THREE.Matrix4();
 const backgroundInstancePosition = new THREE.Vector3();
 const backgroundInstanceQuaternion = new THREE.Quaternion();
 const backgroundInstanceScale = new THREE.Vector3();
-const backgroundInstanceEuler = new THREE.Euler();
 const backgroundInstanceColor = new THREE.Color();
+
+function setUniformRandomQuaternion(target, first, second, third) {
+  const rootA = Math.sqrt(1 - first);
+  const rootB = Math.sqrt(first);
+  const angleA = Math.PI * 2 * second;
+  const angleB = Math.PI * 2 * third;
+  return target.set(
+    rootA * Math.sin(angleA),
+    rootA * Math.cos(angleA),
+    rootB * Math.sin(angleB),
+    rootB * Math.cos(angleB)
+  );
+}
 const leftTrajectoryWorldPoints = Array.from({ length: sideTrajectoryPointCount }, () => new THREE.Vector3());
 const rightTrajectoryWorldPoints = Array.from({ length: sideTrajectoryPointCount }, () => new THREE.Vector3());
 const leftTrajectoryNdcPoints = Array.from({ length: sideTrajectoryPointCount }, () => new THREE.Vector3());
@@ -549,12 +642,12 @@ function rebuildBackgroundField(force = false) {
           const dz = pz - fieldCenter.z;
           if (dx * dx + dy * dy + dz * dz > loadRadiusSq) continue;
           backgroundInstancePosition.set(px, py, pz);
-          backgroundInstanceEuler.set(
-            (backgroundRandom(x, y, z, salt + 4) - 0.5) * 0.35,
-            (backgroundRandom(x, y, z, salt + 5) - 0.5) * 0.35,
-            backgroundRandom(x, y, z, salt + 6) * Math.PI * 2
+          setUniformRandomQuaternion(
+            backgroundInstanceQuaternion,
+            backgroundRandom(x, y, z, salt + 4),
+            backgroundRandom(x, y, z, salt + 5),
+            backgroundRandom(x, y, z, salt + 6)
           );
-          backgroundInstanceQuaternion.setFromEuler(backgroundInstanceEuler);
           const scale = 0.52 + backgroundRandom(x, y, z, salt + 7) * 0.72;
           backgroundInstanceScale.setScalar(scale);
           backgroundInstanceMatrix.compose(
@@ -1074,11 +1167,11 @@ function createNoteMesh(kind = "middle") {
         : palette.white;
   const mesh = new THREE.Mesh(
     sphereGeo,
-    isSpace ? matSpace.clone() : kind === "middle" ? matMiddle.clone() : makeHotGlowMaterial(color, 0.99, 2.18)
+    isSpace ? matSpace.clone() : kind === "middle" ? matMiddle.clone() : makeNoteGlowMaterial(color, 0.99, 2.18)
   );
   const halo = new THREE.Mesh(
     noteHaloGeo,
-    makeHotGlowMaterial(color, 0.56, 1.9)
+    makeNoteGlowMaterial(color, 0.56, 1.9)
   );
   halo.userData.baseOpacity = 0.56;
   halo.scale.setScalar(middleHaloScale);
@@ -1088,7 +1181,7 @@ function createNoteMesh(kind = "middle") {
     const satellites = Array.from({ length: 4 }, (_, index) => {
       const satellite = new THREE.Mesh(
         sphereGeo,
-        makeHotGlowMaterial(palette.space, 0.82, 2.05)
+        makeNoteGlowMaterial(palette.space, 0.82, 2.05)
       );
       const axis = normalizeVector({
         x: Math.sin(index * 1.71),
@@ -1105,7 +1198,7 @@ function createNoteMesh(kind = "middle") {
         trails: Array.from({ length: 12 }, (_, trailIndex) => {
           const trail = new THREE.Mesh(
             sphereGeo,
-            makeHotGlowMaterial(palette.space, 0.74, 2.18)
+            makeNoteGlowMaterial(palette.space, 0.74, 2.18)
           );
           trail.material.depthTest = false;
           trail.renderOrder = 8;
@@ -1189,7 +1282,7 @@ function createHoldNoteMesh(kind = "middle", particleLayout = []) {
   const bodyParticles = particleLayout.map((placement, index) => {
     const triangle = new THREE.Mesh(
       holdTriangleGeo,
-      makeHotGlowMaterial(color, 0.58, 1.88)
+      makeNoteGlowMaterial(color, 0.58, 1.88)
     );
     const radial = Math.sqrt(((index * 0.61803398875) % 1));
     const angle = ((index * 2.39996322973) + Math.sin(index * 5.17) * 0.45) % (Math.PI * 2);
@@ -1251,20 +1344,21 @@ function makeTopArrowGeometry(width, height) {
 
 function createLayeredArrowNote(geometry, color, haloSize = 3.8) {
   const group = new THREE.Group();
-  const softHalo = new THREE.Sprite(new THREE.SpriteMaterial({
+  const softHalo = new THREE.Sprite(installReadableForegroundFog(new THREE.SpriteMaterial({
     map: softHaloTexture,
     color,
     transparent: true,
-    opacity: 0.48,
+    opacity: gameConfig.rendering.noteSoftHaloOpacity,
     blending: THREE.AdditiveBlending,
     depthTest: false,
-    depthWrite: false
-  }));
-  const outerGlow = new THREE.Mesh(geometry, makeHotGlowMaterial(color, 0.34, 2.85));
-  const glow = new THREE.Mesh(geometry, makeHotGlowMaterial(color, 0.72, 2.6));
-  const arrow = new THREE.Mesh(geometry, makeHotGlowMaterial(color, 0.99, 2.75));
+    depthWrite: false,
+    fog: true
+  })));
+  const outerGlow = new THREE.Mesh(geometry, makeNoteGlowMaterial(color, 0.34, 1));
+  const glow = new THREE.Mesh(geometry, makeNoteGlowMaterial(color, 0.72, 1));
+  const arrow = new THREE.Mesh(geometry, makeNoteGlowMaterial(color, 0.99, 1));
   softHalo.scale.setScalar(haloSize);
-  softHalo.userData.opacityScale = 0.48;
+  softHalo.userData.opacityScale = gameConfig.rendering.noteSoftHaloOpacity;
   outerGlow.scale.setScalar(1.58);
   outerGlow.position.z = -0.02;
   glow.scale.setScalar(1.3);
@@ -1757,7 +1851,11 @@ function makeEllipseTubeGeometry(radiusX, radiusY, tubeRadius) {
 
 const receiverRing = new THREE.Mesh(
   makeEllipseTubeGeometry(playfieldConfig.receiverRadius, playfieldConfig.receiverRadius, 0.032),
-  makeHotGlowMaterial(0xeaf7ff, 0.92, 1.45)
+  makeForegroundGlowMaterial(
+    0xeaf7ff,
+    renderConfig.receiverGlowOpacity,
+    renderConfig.receiverGlowIntensity
+  )
 );
 receiverGroup.add(receiverRing);
 
@@ -1857,7 +1955,7 @@ function syncPlayfieldVisuals() {
 const landingHintGeo = new THREE.TorusGeometry(0.34, 0.018, 40, 6);
 landingHintGeo.rotateX(Math.PI / 2);
 function acquireLandingHint() {
-  const hint = new THREE.Mesh(landingHintGeo, makeGlowMaterial(0xeaf7ff, 0.18));
+  const hint = new THREE.Mesh(landingHintGeo, makeForegroundGlowMaterial(0xeaf7ff, 0.18));
   hint.material.depthTest = false;
   hint.renderOrder = 12;
   hint.visible = false;
@@ -1873,7 +1971,7 @@ let nextHitParticleIndex = 0;
 const hitEffectParticles = Array.from({ length: renderConfig.pooledHitParticles }, () => {
   const particle = new THREE.Mesh(
     hitParticleGeometry,
-    makeHotGlowMaterial(palette.white, 0, 2.2)
+    makeForegroundGlowMaterial(palette.white, 0, renderConfig.hitGlowIntensity)
   );
   particle.material.depthTest = false;
   particle.renderOrder = 16;
@@ -1918,7 +2016,8 @@ function spawnHitEffect(note) {
     data.spawnedAt = spawnedAt;
     data.duration = 0.42 + Math.random() * 0.22;
     data.baseScale = 0.15 + Math.random() * 0.2;
-    data.baseOpacity = 0.68 + Math.random() * 0.3;
+    data.baseOpacity = renderConfig.hitParticleBaseOpacity
+      + Math.random() * renderConfig.hitParticleOpacityRange;
     data.origin.copy(origin);
     data.velocity
       .copy(axisA).multiplyScalar(Math.cos(angle) * speed)
@@ -1926,7 +2025,7 @@ function spawnHitEffect(note) {
       .addScaledVector(fallAxis, (Math.random() - 0.5) * 0.65);
     data.spin = (Math.random() < 0.5 ? -1 : 1) * (2.5 + Math.random() * 4.5);
     data.rotation = Math.random() * Math.PI * 2;
-    particle.material.color.copy(color).multiplyScalar(2.2);
+    particle.material.color.copy(color).multiplyScalar(renderConfig.hitGlowIntensity);
     particle.material.opacity = data.baseOpacity;
     particle.position.copy(origin);
     particle.visible = true;
@@ -1957,7 +2056,7 @@ const receiverSquareParticles = Array.from({ length: renderConfig.receiverPartic
   const size = 0.14 + (index % 4) * 0.045;
   const square = new THREE.Mesh(
     new THREE.PlaneGeometry(size, size),
-    makeGlowMaterial(0xd0d3d8, 0.55)
+    makeForegroundGlowMaterial(0xd0d3d8, renderConfig.receiverParticleMaterialOpacity)
   );
   const angle = (index / renderConfig.receiverParticles) * Math.PI * 2 + Math.sin(index * 8.31) * 0.22;
   square.userData = {
@@ -1968,7 +2067,7 @@ const receiverSquareParticles = Array.from({ length: renderConfig.receiverPartic
     radialDrift: Math.sin(index * 11.7) * 0.22,
     tangentDrift: Math.cos(index * 7.9) * 0.28,
     speed: 0.09 + (index % 5) * 0.02,
-    baseOpacity: 0.62 + (index % 3) * 0.08
+    baseOpacity: renderConfig.receiverParticleBaseOpacity + (index % 3) * 0.08
   };
   receiverGroup.add(square);
   return square;
@@ -2060,9 +2159,17 @@ function frameEditorFreeCamera() {
     viewDirection.set(0, 0, 1).applyQuaternion(receiverState.currentQuaternion);
   }
   const previewConfig = gameConfig.editorPreview;
+  const playCameraDistance = resolveCameraProfile(
+    0,
+    0,
+    receiverState.anchor,
+    receiverState.currentQuaternion,
+    currentCameraOffset()
+  ).position.distanceTo(target);
   const initialDistance = Math.max(
     previewConfig.initialDistance,
-    playfieldConfig.receiverRadius * previewConfig.receiverDistanceScale
+    playfieldConfig.receiverRadius * previewConfig.receiverDistanceScale,
+    playCameraDistance * 1.25
   );
   camera.position.copy(target).addScaledVector(viewDirection.normalize(), initialDistance);
   camera.up.set(0, 1, 0).applyQuaternion(receiverState.currentQuaternion).normalize();
@@ -2088,6 +2195,38 @@ function configureEditorFreeCameraLimits(target = controls.target, minimumMaximu
   camera.updateProjectionMatrix();
 }
 
+function updateEditorCameraGuide(t = 0, bob = 0) {
+  const visible = editorPreviewMode && editorPreviewView === "free";
+  editorCameraGuideRoot.visible = visible;
+  if (!visible) return;
+
+  const pose = resolveCameraProfile(
+    t,
+    bob,
+    receiverState.anchor,
+    receiverState.currentQuaternion,
+    currentCameraOffset()
+  );
+  editorPlayCamera.position.copy(pose.position);
+  editorPlayCamera.up.copy(pose.up);
+  editorPlayCamera.fov = pose.fov;
+  editorPlayCamera.aspect = camera.aspect;
+  editorPlayCamera.near = 0.35;
+  editorPlayCamera.far = Math.max(8, playfieldConfig.receiverRadius * 1.5);
+  editorPlayCamera.lookAt(pose.target);
+  editorPlayCamera.updateProjectionMatrix();
+  editorPlayCamera.updateMatrixWorld(true);
+  editorCameraHelper.update();
+
+  const direction = pose.target.clone().sub(pose.position);
+  const guideLength = Math.max(4, Math.min(14, direction.length() * 0.38));
+  if (direction.lengthSq() < 0.000001) direction.set(0, 0, -1).applyQuaternion(receiverState.currentQuaternion);
+  editorCameraMarker.position.copy(pose.position);
+  editorCameraDirection.position.copy(pose.position);
+  editorCameraDirection.setDirection(direction.normalize());
+  editorCameraDirection.setLength(guideLength, 1.1, 0.62);
+}
+
 let lastEditorCameraPostTime = -Infinity;
 let lastEditorCameraSignature = "";
 
@@ -2096,6 +2235,7 @@ function setEditorPreviewView(view) {
   const free = editorPreviewView === "free";
   scene.fog = free ? null : playSceneFog;
   editorRouteRoot.visible = free;
+  editorCameraGuideRoot.visible = free && editorPreviewMode;
   setFreeCamera(free);
   if (free) frameEditorFreeCamera();
   lastEditorCameraPostTime = -Infinity;
@@ -3199,6 +3339,7 @@ function animate() {
     const target = applyCameraProfile(t, slowBeat, receiverState.anchor, receiverState.currentQuaternion, cameraOffset);
     controls.target.copy(target);
   }
+  updateEditorCameraGuide(t, slowBeat);
   postEditorPreviewCamera(t);
   updateCameraDebug();
   updateReceiver(t, beat);
