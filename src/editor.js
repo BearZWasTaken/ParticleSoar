@@ -24,9 +24,9 @@ import {
   timeAtBeat,
   trajectoryPoseAt,
   receiverFrameAt
-} from "./chart-core.js?v=20260828-56";
-import { CONFIG } from "./config.js?v=20260828-56";
-import { createProjectZip, projectJson, readProjectZip } from "./project-package.js?v=20260828-56";
+} from "./chart-core.js?v=20260828-66";
+import { CONFIG } from "./config.js?v=20260828-66";
+import { createProjectZip, projectJson, readProjectZip } from "./project-package.js?v=20260828-66";
 
 const editorConfig = CONFIG.editor;
 const colorConfig = CONFIG.colors;

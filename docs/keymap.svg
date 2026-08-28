@@ -1,0 +1,92 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="560" viewBox="0 0 1400 560">
+  <defs>
+    <filter id="glow"><feGaussianBlur stdDeviation="5" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+    <style>
+      .bg{fill:#05090f}.key{stroke:#8a9aaa;stroke-width:1.5}.label{fill:#f2f7fb;font:600 21px system-ui;text-anchor:middle;dominant-baseline:middle}.small{fill:#93a4b2;font:15px system-ui}.title{fill:#f2f7fb;font:700 28px system-ui}.sub{fill:#93a4b2;font:16px system-ui}.left{fill:#1784a6}.middle{fill:#687987}.right{fill:#b6356d}.top{fill:#39866a}.space{fill:#b79334}.off{fill:#111923}.bar-left{fill:#70dcff}.bar-middle{fill:#eaf3f7}.bar-right{fill:#ff70aa}.bar-top{fill:#9af2c5}.bar-space{fill:#ffd66b}
+    </style>
+    <g id="k"><rect class="key" width="72" height="58" rx="5"/></g>
+  </defs>
+  <rect class="bg" width="1400" height="560"/>
+  <text class="title" x="55" y="50">ParticleSoar KEY MAP</text>
+  <text class="sub" x="55" y="80">Key fill = first judgement priority · bottom strips = every accepted note type</text>
+
+  <!-- number row -->
+  <g transform="translate(55 115)">
+    <g transform="translate(0)"><use href="#k" class="left"/><text class="label" x="36" y="29">`</text><rect class="bar-left" y="52" width="72" height="6"/></g>
+    <g transform="translate(80)"><use href="#k" class="left"/><text class="label" x="36" y="29">1</text><rect class="bar-left" y="52" width="36" height="6"/><rect class="bar-top" x="36" y="52" width="36" height="6"/></g>
+    <g transform="translate(160)"><use href="#k" class="left"/><text class="label" x="36" y="29">2</text><rect class="bar-left" y="52" width="36" height="6"/><rect class="bar-top" x="36" y="52" width="36" height="6"/></g>
+    <g transform="translate(240)"><use href="#k" class="left"/><text class="label" x="36" y="29">3</text><rect class="bar-left" y="52" width="36" height="6"/><rect class="bar-top" x="36" y="52" width="36" height="6"/></g>
+    <g transform="translate(320)"><use href="#k" class="top"/><text class="label" x="36" y="29">4</text><rect class="bar-top" y="52" width="72" height="6"/></g>
+    <g transform="translate(400)"><use href="#k" class="top"/><text class="label" x="36" y="29">5</text><rect class="bar-top" y="52" width="72" height="6"/></g>
+    <g transform="translate(480)"><use href="#k" class="top"/><text class="label" x="36" y="29">6</text><rect class="bar-top" y="52" width="72" height="6"/></g>
+    <g transform="translate(560)"><use href="#k" class="top"/><text class="label" x="36" y="29">7</text><rect class="bar-top" y="52" width="72" height="6"/></g>
+    <g transform="translate(640)"><use href="#k" class="top"/><text class="label" x="36" y="29">8</text><rect class="bar-top" y="52" width="72" height="6"/></g>
+    <g transform="translate(720)"><use href="#k" class="top"/><text class="label" x="36" y="29">9</text><rect class="bar-top" y="52" width="72" height="6"/></g>
+    <g transform="translate(800)"><use href="#k" class="right"/><text class="label" x="36" y="29">0</text><rect class="bar-right" y="52" width="36" height="6"/><rect class="bar-top" x="36" y="52" width="36" height="6"/></g>
+    <g transform="translate(880)"><use href="#k" class="right"/><text class="label" x="36" y="29">-</text><rect class="bar-right" y="52" width="36" height="6"/><rect class="bar-top" x="36" y="52" width="36" height="6"/></g>
+    <g transform="translate(960)"><use href="#k" class="right"/><text class="label" x="36" y="29">=</text><rect class="bar-right" y="52" width="36" height="6"/><rect class="bar-top" x="36" y="52" width="36" height="6"/></g>
+    <g transform="translate(1040)"><rect class="key right" width="125" height="58" rx="5"/><text class="label" x="62" y="29">Backspace</text><rect class="bar-right" y="52" width="125" height="6"/></g>
+  </g>
+
+  <!-- Q row -->
+  <g transform="translate(55 181)">
+    <g><rect class="key left" width="105" height="58" rx="5"/><text class="label" x="52" y="29">Tab</text><rect class="bar-left" y="52" width="105" height="6"/></g>
+    <g transform="translate(113)"><use href="#k" class="left"/><text class="label" x="36" y="29">Q</text><rect class="bar-left" y="52" width="72" height="6"/></g>
+    <g transform="translate(193)"><use href="#k" class="left"/><text class="label" x="36" y="29">W</text><rect class="bar-left" y="52" width="72" height="6"/></g>
+    <g transform="translate(273)"><use href="#k" class="middle"/><text class="label" x="36" y="29">E</text><rect class="bar-middle" y="52" width="36" height="6"/><rect class="bar-left" x="36" y="52" width="36" height="6"/></g>
+    <g transform="translate(353)"><use href="#k" class="middle"/><text class="label" x="36" y="29">R</text><rect class="bar-middle" y="52" width="72" height="6"/></g>
+    <g transform="translate(433)"><use href="#k" class="middle"/><text class="label" x="36" y="29">T</text><rect class="bar-middle" y="52" width="72" height="6"/></g>
+    <g transform="translate(513)"><use href="#k" class="middle"/><text class="label" x="36" y="29">Y</text><rect class="bar-middle" y="52" width="72" height="6"/></g>
+    <g transform="translate(593)"><use href="#k" class="middle"/><text class="label" x="36" y="29">U</text><rect class="bar-middle" y="52" width="72" height="6"/></g>
+    <g transform="translate(673)"><use href="#k" class="middle"/><text class="label" x="36" y="29">I</text><rect class="bar-middle" y="52" width="72" height="6"/></g>
+    <g transform="translate(753)"><use href="#k" class="middle"/><text class="label" x="36" y="29">O</text><rect class="bar-middle" y="52" width="36" height="6"/><rect class="bar-right" x="36" y="52" width="36" height="6"/></g>
+    <g transform="translate(833)"><use href="#k" class="right"/><text class="label" x="36" y="29">P</text><rect class="bar-right" y="52" width="72" height="6"/></g>
+    <g transform="translate(913)"><use href="#k" class="right"/><text class="label" x="36" y="29">[</text><rect class="bar-right" y="52" width="72" height="6"/></g>
+    <g transform="translate(993)"><use href="#k" class="right"/><text class="label" x="36" y="29">]</text><rect class="bar-right" y="52" width="72" height="6"/></g>
+    <g transform="translate(1073)"><use href="#k" class="right"/><text class="label" x="36" y="29">\</text><rect class="bar-right" y="52" width="72" height="6"/></g>
+  </g>
+
+  <!-- home row -->
+  <g transform="translate(55 247)">
+    <g><rect class="key left" width="125" height="58" rx="5"/><text class="label" x="62" y="29">Caps</text><rect class="bar-left" y="52" width="125" height="6"/></g>
+    <g transform="translate(133)"><use href="#k" class="left"/><text class="label" x="36" y="29">A</text><rect class="bar-left" y="52" width="72" height="6"/></g>
+    <g transform="translate(213)"><use href="#k" class="left"/><text class="label" x="36" y="29">S</text><rect class="bar-left" y="52" width="36" height="6"/><rect class="bar-middle" x="36" y="52" width="36" height="6"/></g>
+    <g transform="translate(293)"><use href="#k" class="middle"/><text class="label" x="36" y="29">D</text><rect class="bar-middle" y="52" width="36" height="6"/><rect class="bar-left" x="36" y="52" width="36" height="6"/></g>
+    <g transform="translate(373)"><use href="#k" class="middle"/><text class="label" x="36" y="29">F</text><rect class="bar-middle" y="52" width="72" height="6"/></g>
+    <g transform="translate(453)"><use href="#k" class="middle"/><text class="label" x="36" y="29">G</text><rect class="bar-middle" y="52" width="72" height="6"/></g>
+    <g transform="translate(533)"><use href="#k" class="middle"/><text class="label" x="36" y="29">H</text><rect class="bar-middle" y="52" width="72" height="6"/></g>
+    <g transform="translate(613)"><use href="#k" class="middle"/><text class="label" x="36" y="29">J</text><rect class="bar-middle" y="52" width="72" height="6"/></g>
+    <g transform="translate(693)"><use href="#k" class="middle"/><text class="label" x="36" y="29">K</text><rect class="bar-middle" y="52" width="36" height="6"/><rect class="bar-right" x="36" y="52" width="36" height="6"/></g>
+    <g transform="translate(773)"><use href="#k" class="right"/><text class="label" x="36" y="29">L</text><rect class="bar-right" y="52" width="36" height="6"/><rect class="bar-middle" x="36" y="52" width="36" height="6"/></g>
+    <g transform="translate(853)"><use href="#k" class="right"/><text class="label" x="36" y="29">;</text><rect class="bar-right" y="52" width="72" height="6"/></g>
+    <g transform="translate(933)"><use href="#k" class="right"/><text class="label" x="36" y="29">'</text><rect class="bar-right" y="52" width="72" height="6"/></g>
+    <g transform="translate(1013)"><rect class="key right" width="152" height="58" rx="5"/><text class="label" x="76" y="29">Enter</text><rect class="bar-right" y="52" width="152" height="6"/></g>
+  </g>
+
+  <!-- bottom row -->
+  <g transform="translate(55 313)">
+    <g><rect class="key left" width="165" height="58" rx="5"/><text class="label" x="82" y="29">L Shift</text><rect class="bar-left" y="52" width="165" height="6"/></g>
+    <g transform="translate(173)"><use href="#k" class="left"/><text class="label" x="36" y="29">Z</text><rect class="bar-left" y="52" width="72" height="6"/></g>
+    <g transform="translate(253)"><use href="#k" class="middle"/><text class="label" x="36" y="29">X</text><rect class="bar-middle" y="52" width="36" height="6"/><rect class="bar-left" x="36" y="52" width="36" height="6"/></g>
+    <g transform="translate(333)"><use href="#k" class="middle"/><text class="label" x="36" y="29">C</text><rect class="bar-middle" y="52" width="72" height="6"/></g>
+    <g transform="translate(413)"><use href="#k" class="middle"/><text class="label" x="36" y="29">V</text><rect class="bar-middle" y="52" width="72" height="6"/></g>
+    <g transform="translate(493)"><use href="#k" class="middle"/><text class="label" x="36" y="29">B</text><rect class="bar-middle" y="52" width="72" height="6"/></g>
+    <g transform="translate(573)"><use href="#k" class="middle"/><text class="label" x="36" y="29">N</text><rect class="bar-middle" y="52" width="72" height="6"/></g>
+    <g transform="translate(653)"><use href="#k" class="middle"/><text class="label" x="36" y="29">M</text><rect class="bar-middle" y="52" width="72" height="6"/></g>
+    <g transform="translate(733)"><use href="#k" class="middle"/><text class="label" x="36" y="29">,</text><rect class="bar-middle" y="52" width="36" height="6"/><rect class="bar-right" x="36" y="52" width="36" height="6"/></g>
+    <g transform="translate(813)"><use href="#k" class="right"/><text class="label" x="36" y="29">.</text><rect class="bar-right" y="52" width="72" height="6"/></g>
+    <g transform="translate(893)"><use href="#k" class="right"/><text class="label" x="36" y="29">/</text><rect class="bar-right" y="52" width="72" height="6"/></g>
+    <g transform="translate(973)"><rect class="key right" width="192" height="58" rx="5"/><text class="label" x="96" y="29">R Shift</text><rect class="bar-right" y="52" width="192" height="6"/></g>
+  </g>
+
+  <g transform="translate(327 386)"><rect class="key space" width="620" height="58" rx="5"/><text class="label" x="310" y="29">SPACE</text><rect class="bar-space" y="52" width="620" height="6"/></g>
+
+  <g transform="translate(55 488)" filter="url(#glow)">
+    <circle class="bar-left" cx="8" cy="8" r="7"/><text class="small" x="24" y="13">LEFT</text>
+    <circle class="bar-middle" cx="128" cy="8" r="7"/><text class="small" x="144" y="13">MIDDLE</text>
+    <circle class="bar-right" cx="283" cy="8" r="7"/><text class="small" x="299" y="13">RIGHT</text>
+    <circle class="bar-top" cx="414" cy="8" r="7"/><text class="small" x="430" y="13">TOP</text>
+    <circle class="bar-space" cx="527" cy="8" r="7"/><text class="small" x="543" y="13">SPACE</text>
+  </g>
+  <text class="sub" x="820" y="501">Exceptions: S → LEFT first · L → RIGHT first</text>
+</svg>

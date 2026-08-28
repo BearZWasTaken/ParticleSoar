@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ParticleSoar - First Flight</title>
+  <link rel="stylesheet" href="./select.css?v=20260828-5">
+</head>
+<body>
+  <canvas id="starfield" aria-hidden="true"></canvas>
+
+  <header class="chapter-header">
+    <div>
+      <span id="chapter-subtitle">CHAPTER 01</span>
+      <h1 id="chapter-title">First Flight</h1>
+    </div>
+    <div class="profile-state">
+      <span>LOCAL PROFILE</span>
+      <strong id="progress-count">0 / 0</strong>
+    </div>
+  </header>
+
+  <main class="constellation" id="constellation" aria-label="章节星图">
+    <div id="constellation-stage" class="constellation-stage">
+      <svg id="constellation-lines" viewBox="0 0 1000 700" preserveAspectRatio="none" aria-hidden="true"></svg>
+      <div id="song-nodes" class="song-nodes"></div>
+    </div>
+  </main>
+
+  <aside id="song-info" class="song-info" aria-live="polite" hidden>
+    <span id="song-state"></span>
+    <h2 id="song-title"></h2>
+    <p id="song-composer"></p>
+    <div id="song-difficulties" class="song-difficulties"></div>
+  </aside>
+
+  <div id="loading-state" class="loading-state">LOADING CONSTELLATION</div>
+  <script type="module" src="./src/song-select.js?v=20260829-1"></script>
+</body>
+</html>

@@ -1,0 +1,395 @@
+:root {
+  color-scheme: dark;
+  font-family: Inter, "Segoe UI", sans-serif;
+  color: #dde3e7;
+  background: #03060b;
+  --cyan: #70dcff;
+  --muted: #82909a;
+}
+
+* { box-sizing: border-box; }
+
+html,
+body {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+  background: #03060b;
+}
+
+body { position: relative; }
+
+#starfield {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.chapter-header {
+  position: fixed;
+  z-index: 20;
+  top: 0;
+  left: 0;
+  right: 0;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  padding: 34px 42px;
+  pointer-events: none;
+}
+
+.chapter-header span,
+.profile-state span {
+  display: block;
+  color: var(--cyan);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0;
+}
+
+.chapter-header h1 {
+  margin: 6px 0 0;
+  font-size: 32px;
+  font-weight: 650;
+  letter-spacing: 0;
+}
+
+.profile-state {
+  padding-top: 2px;
+  text-align: right;
+}
+
+.profile-state span { color: var(--muted); }
+
+.profile-state strong {
+  display: block;
+  margin-top: 7px;
+  font-size: 18px;
+  font-variant-numeric: tabular-nums;
+}
+
+.constellation {
+  position: fixed;
+  inset: 104px 4vw 58px;
+  min-width: 0;
+  min-height: 0;
+}
+
+.constellation-stage {
+  --focus-x: 50%;
+  --focus-y: 50%;
+  position: absolute;
+  inset: 0;
+  transform-origin: var(--focus-x) var(--focus-y);
+  transition: transform 520ms cubic-bezier(0.2, 0.72, 0.18, 1);
+}
+
+.constellation.is-focused .constellation-stage { transform: scale(2.65); }
+
+#constellation-lines,
+.song-nodes {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.constellation-link {
+  fill: none;
+  stroke: rgba(112, 220, 255, 0.58);
+  stroke-width: 1.4;
+  vector-effect: non-scaling-stroke;
+  filter: drop-shadow(0 0 5px rgba(112, 220, 255, 0.42));
+}
+
+.constellation-link.is-locked {
+  stroke: rgba(126, 139, 148, 0.17);
+  stroke-dasharray: 4 8;
+  filter: none;
+}
+
+.song-node {
+  position: absolute;
+  width: 78px;
+  height: 78px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: #0b1017;
+  transform: translate(-50%, -50%);
+  cursor: pointer;
+  isolation: isolate;
+  transition: opacity 180ms ease, filter 180ms ease;
+}
+
+.song-node::before,
+.song-node::after {
+  content: "";
+  position: absolute;
+  border-radius: 50%;
+  pointer-events: none;
+}
+
+.song-node::before {
+  inset: -5px;
+  border: 1px solid rgba(221, 227, 231, 0.7);
+  box-shadow: 0 0 15px rgba(112, 220, 255, 0.25);
+}
+
+.song-node::after {
+  inset: -11px;
+  border: 1px solid rgba(112, 220, 255, 0.18);
+  opacity: 0;
+  transform: scale(0.9);
+  transition: opacity 160ms ease, transform 240ms ease;
+}
+
+.song-node:hover,
+.song-node:focus-visible {
+  z-index: 5;
+  outline: none;
+}
+
+.song-node:hover::after,
+.song-node:focus-visible::after {
+  opacity: 1;
+  transform: scale(1);
+}
+
+.song-node img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  object-fit: cover;
+  transition: filter 180ms ease, transform 220ms ease;
+}
+
+.song-node:hover img,
+.song-node:focus-visible img { transform: scale(1.035); }
+
+.song-node.is-locked { cursor: not-allowed; }
+
+.song-node.is-locked::before {
+  border-color: rgba(126, 139, 148, 0.22);
+  box-shadow: none;
+}
+
+.song-node.is-locked img { filter: grayscale(1) brightness(0.24) blur(2px); }
+
+.constellation.is-focused .song-node:not(.is-selected) {
+  opacity: 0.18;
+  filter: saturate(0.35);
+}
+
+.song-node.is-selected { z-index: 8; }
+
+.song-node.is-selected::before {
+  inset: -7px;
+  border-color: rgba(221, 227, 231, 0.92);
+  box-shadow: 0 0 22px rgba(112, 220, 255, 0.42);
+}
+
+.song-node.is-selected img {
+  filter: brightness(0.24) saturate(0.62);
+  transform: none;
+}
+
+.song-node-status {
+  position: absolute;
+  z-index: 2;
+  left: 50%;
+  bottom: -24px;
+  min-width: 62px;
+  transform: translateX(-50%);
+  color: #aab4bb;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0;
+  white-space: nowrap;
+}
+
+.song-node:not(.is-locked) .song-node-status { color: var(--cyan); }
+.song-node.is-selected .song-node-status { opacity: 0; }
+
+.difficulty-picker {
+  position: absolute;
+  z-index: 4;
+  inset: 9px 8px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 1px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 160ms ease;
+}
+
+.song-node.is-selected .difficulty-picker {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.difficulty-choice {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-width: 0;
+  height: 10px;
+  padding: 0 3px 0 7px;
+  border: 0;
+  border-bottom: 1px solid rgba(221, 227, 231, 0.1);
+  border-radius: 0;
+  color: #dfe5e8;
+  background: rgba(4, 8, 13, 0.16);
+  cursor: pointer;
+  font-family: inherit;
+  line-height: 1;
+  transition: color 120ms ease, background 120ms ease, box-shadow 120ms ease;
+}
+
+.difficulty-choice::before {
+  content: "";
+  position: absolute;
+  left: 1px;
+  top: 2px;
+  bottom: 2px;
+  width: 2px;
+  background: var(--difficulty-color);
+  box-shadow: 0 0 4px color-mix(in srgb, var(--difficulty-color) 72%, transparent);
+}
+
+.difficulty-choice strong,
+.difficulty-choice span {
+  display: block;
+  font-size: 5px;
+  letter-spacing: 0;
+}
+
+.difficulty-choice strong {
+  color: var(--difficulty-color);
+  font-weight: 800;
+}
+
+.difficulty-choice span {
+  color: rgba(238, 243, 245, 0.86);
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+}
+
+.difficulty-picker[data-count="1"] .difficulty-choice {
+  height: 18px;
+  padding-right: 6px;
+  padding-left: 9px;
+  border-top: 1px solid rgba(221, 227, 231, 0.12);
+}
+
+.difficulty-picker[data-count="1"] .difficulty-choice::before {
+  top: 4px;
+  bottom: 4px;
+}
+
+.difficulty-picker[data-count="1"] .difficulty-choice strong,
+.difficulty-picker[data-count="1"] .difficulty-choice span {
+  font-size: 7px;
+}
+
+.difficulty-picker[data-count="2"] .difficulty-choice,
+.difficulty-picker[data-count="3"] .difficulty-choice {
+  height: 14px;
+}
+
+.difficulty-picker[data-count="2"] .difficulty-choice strong,
+.difficulty-picker[data-count="2"] .difficulty-choice span,
+.difficulty-picker[data-count="3"] .difficulty-choice strong,
+.difficulty-picker[data-count="3"] .difficulty-choice span {
+  font-size: 6px;
+}
+
+.difficulty-choice:hover,
+.difficulty-choice:focus-visible {
+  outline: none;
+  color: #f5f8f9;
+  background: color-mix(in srgb, var(--difficulty-color) 18%, rgba(4, 8, 13, 0.72));
+  box-shadow: inset 0 0 7px color-mix(in srgb, var(--difficulty-color) 18%, transparent);
+}
+
+.song-info {
+  position: fixed;
+  z-index: 25;
+  width: min(310px, calc(100vw - 36px));
+  padding: 14px 16px;
+  border: 1px solid rgba(112, 220, 255, 0.42);
+  border-radius: 4px;
+  background: rgba(5, 10, 16, 0.93);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.42), 0 0 18px rgba(112, 220, 255, 0.08);
+  pointer-events: none;
+}
+
+.song-info[hidden] { display: none; }
+
+.song-info > span {
+  color: var(--cyan);
+  font-size: 11px;
+  font-weight: 750;
+}
+
+.song-info h2 {
+  margin: 6px 0 2px;
+  font-size: 21px;
+  font-weight: 650;
+  letter-spacing: 0;
+}
+
+.song-info p {
+  margin: 0;
+  color: #a4afb7;
+  font-size: 14px;
+}
+
+.song-difficulties {
+  display: flex;
+  gap: 10px;
+  margin-top: 11px;
+}
+
+.song-difficulty {
+  padding: 4px 8px;
+  border-left: 2px solid var(--difficulty-color, var(--cyan));
+  color: #dce4e8;
+  background: rgba(8, 13, 20, 0.82);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.loading-state {
+  position: fixed;
+  z-index: 40;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  color: #9ba7af;
+  background: #03060b;
+  font-size: 12px;
+  font-weight: 700;
+  transition: opacity 260ms ease;
+}
+
+.loading-state.is-hidden {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.loading-state.is-error { color: #ff829d; }
+
+@media (max-width: 700px) {
+  .chapter-header { padding: 22px 20px; }
+  .chapter-header h1 { font-size: 25px; }
+  .constellation { inset: 92px 12px 72px; }
+  .song-node { width: 68px; height: 68px; }
+  .song-info { width: calc(100vw - 40px); }
+  .constellation.is-focused .constellation-stage { transform: scale(2.25); }
+}

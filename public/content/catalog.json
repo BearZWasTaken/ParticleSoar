@@ -1,0 +1,63 @@
+{
+  "format": "ParticleSoarContent/v1",
+  "entrypoints": {
+    "default": "chapter:first-flight",
+    "library": "library",
+    "chapter:first": "chapter:first-flight"
+  },
+  "nodes": {
+    "library": {
+      "type": "collection",
+      "title": "Song Library",
+      "presentation": {
+        "mode": "list"
+      },
+      "entries": [
+        {
+          "target": "song:particle-arts",
+          "order": 0
+        }
+      ]
+    },
+    "chapter:first-flight": {
+      "type": "chapter",
+      "title": "First Flight",
+      "subtitle": "Chapter 01",
+      "presentation": {
+        "mode": "constellation",
+        "accent": "#70dcff"
+      },
+      "entries": [
+        {
+          "target": "song:particle-arts",
+          "position": [
+            0.48,
+            0.52
+          ],
+          "unlock": {
+            "initial": true
+          }
+        }
+      ],
+      "links": []
+    },
+    "song:particle-arts": {
+      "type": "song",
+      "manifest": "../charts/particle_arts/meta.json",
+      "summary": {
+        "title": "Particle Arts",
+        "composer": "Virtual Self",
+        "illustrator": "who?",
+        "jacket": "particle-arts-jacket.png",
+        "charts": [
+          {
+            "file": "ld.json",
+            "difficultyLabel": "LD",
+            "level": 30,
+            "charter": "first bear"
+          }
+        ]
+      }
+    }
+  }
+}

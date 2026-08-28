@@ -1,4 +1,4 @@
-import { CONFIG } from "./config.js?v=20260828-56";
+import { CONFIG } from "./config.js?v=20260828-66";
 
 const chartConfig = CONFIG.chart;
 const chartDefaults = chartConfig.defaults;

@@ -92,7 +92,7 @@ export const CONFIG = deepFreeze({
     sceneBackground: 0x04070d,
     sceneFog: 0x050914,
     editorBackground: 0x090b0f,
-    white: 0xeaf7ff,
+    white: 0xdde3e7,
     space: 0xffd66b,
     top: 0x9af2c5,
     left: 0x70dcff,
@@ -101,6 +101,14 @@ export const CONFIG = deepFreeze({
     speedFast: 0xd35f91
   },
   game: {
+    launchIntro: {
+      durationSeconds: 2,
+      receiverStartScale: 0.06,
+      noteFlickerSpeed: 22
+    },
+    pause: {
+      escapeConfirmSeconds: 1.25
+    },
     renderer: {
       maxPixelRatio: 1.75,
       exposure: 1.08
@@ -111,13 +119,13 @@ export const CONFIG = deepFreeze({
     camera: {
       fov: 44,
       near: 0.1,
-      far: 140,
+      far: 20000,
       position: [0, 0, 42],
       target: [0, 0, 0],
       swayX: 0,
       bobY: 0,
       controlsMinDistance: 2,
-      controlsMaxDistance: 90,
+      controlsMaxDistance: 20000,
       dampingFactor: 0.08
     },
     bloom: {
@@ -148,17 +156,27 @@ export const CONFIG = deepFreeze({
       hitParticlesPerBurst: 10,
       receiverParticles: 46,
       holdParticlesPerUnit: 5,
+      landingHintBaseOpacity: 0.1,
+      landingHintHitOpacity: 0.1,
       multiHitLineWidth: 0.0315,
       constellationLineOpacity: 0.12,
       multiHitLineOpacity: 0.34,
+      connectionReferenceDistance: 42,
       middleHaloScale: 1.62,
       foregroundFogMaxFactor: 0.35,
-      noteGlowIntensity: 0.2,
-      noteSoftHaloOpacity: 0.2,
+      noteGlowIntensity: 0.22,
+      arrowGlowOuterOpacity: 0.22,
+      arrowGlowOuterIntensity: 10,
+      arrowGlowOuterScale: 1.42,
+      arrowGlowInnerOpacity: 0.58,
+      arrowGlowInnerIntensity: 7,
+      arrowGlowInnerScale: 1.18,
+      arrowGlowAreaExponent: 0.5,
+      arrowBodyIntensity: 2.2,
       receiverGlowOpacity: 0.5,
       receiverGlowIntensity: 1.2,
       receiverParticleMaterialOpacity: 0.32,
-      receiverParticleBaseOpacity: 0.28,
+      receiverParticleBaseOpacity: 0.22,
       hitGlowIntensity: 1.2,
       hitParticleBaseOpacity: 0.45,
       hitParticleOpacityRange: 0.18
@@ -173,7 +191,7 @@ export const CONFIG = deepFreeze({
       maxPoints: 65000,
       maxTriangles: 5000,
       pointOpacity: 0.3,
-      triangleOpacity: 0.21,
+      triangleOpacity: 0.15,
       nearFadeStart: 16,
       nearFadeEnd: 24,
       playfieldClearDepthFeather: 2
@@ -219,10 +237,10 @@ export const CONFIG = deepFreeze({
       scoreDigits: 7
     },
     input: {
-      left: ["Backquote", "Tab", "CapsLock", "ShiftLeft", "Digit1", "Digit2", "Digit3", "KeyQ", "KeyW", "KeyE", "KeyA", "KeyS", "KeyZ", "KeyX"],
-      right: ["KeyP", "BracketLeft", "BracketRight", "Backslash", "Semicolon", "Quote", "Enter", "Period", "Slash", "ShiftRight", "Minus", "Equal", "Backspace"],
-      middle: ["KeyR", "KeyT", "KeyY", "KeyU", "KeyI", "KeyO", "KeyD", "KeyF", "KeyG", "KeyH", "KeyJ", "KeyK", "KeyL", "KeyC", "KeyV", "KeyB", "KeyN", "KeyM", "Comma"],
-      top: ["Digit4", "Digit5", "Digit6", "Digit7", "Digit8", "Digit9", "Digit0"],
+      left: ["Backquote", "Tab", "CapsLock", "ShiftLeft", "Digit1", "Digit2", "Digit3", "KeyQ", "KeyW", "KeyE", "KeyA", "KeyS", "KeyD", "KeyZ", "KeyX"],
+      right: ["Digit0", "KeyO", "KeyP", "BracketLeft", "BracketRight", "Backslash", "KeyK", "KeyL", "Semicolon", "Quote", "Enter", "Comma", "Period", "Slash", "ShiftRight", "Minus", "Equal", "Backspace"],
+      middle: ["KeyE", "KeyR", "KeyT", "KeyY", "KeyU", "KeyI", "KeyO", "KeyS", "KeyD", "KeyF", "KeyG", "KeyH", "KeyJ", "KeyK", "KeyL", "KeyX", "KeyC", "KeyV", "KeyB", "KeyN", "KeyM", "Comma"],
+      top: ["Digit1", "Digit2", "Digit3", "Digit4", "Digit5", "Digit6", "Digit7", "Digit8", "Digit9", "Digit0", "Minus", "Equal"],
       space: ["Space"]
     }
   },

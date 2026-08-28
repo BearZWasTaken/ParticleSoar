@@ -21,8 +21,8 @@
     <span id="camera-mode">free</span>
     <span id="logic-state">on</span>
   </div>
-  <div class="combo-display" aria-live="polite">
-    <span>COMBO</span>
+  <div class="combo-display" id="combo-display" aria-live="polite">
+    <span id="combo-label">COMBO</span>
     <strong id="combo-count">0</strong>
   </div>
   <div class="difficulty-display" id="difficulty-badge" aria-label="Chart difficulty: -HS- 67">
@@ -34,6 +34,21 @@
     <div>target <span id="camera-target">0, 0, 0</span></div>
     <div>fov <span id="camera-fov">44</span></div>
     <div>bg <span id="background-count">0 points / 0 triangles</span></div>
+  </div>
+  <div class="launch-overlay" id="launch-overlay" hidden>
+    <span id="launch-kicker">READY</span>
+    <strong id="launch-title">ParticleSoar</strong>
+    <button type="button" id="launch-button">START</button>
+  </div>
+  <div class="pause-overlay" id="pause-overlay" role="dialog" aria-modal="true" aria-labelledby="pause-title" hidden>
+    <section class="pause-panel">
+      <h2 id="pause-title">PAUSED</h2>
+      <div class="pause-actions">
+        <button type="button" id="pause-continue">Continue</button>
+        <button type="button" id="pause-restart">Restart</button>
+        <button type="button" id="pause-exit">Exit</button>
+      </div>
+    </section>
   </div>
 </div>
 
@@ -55,15 +70,36 @@ import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js"
 import { Line2 } from "three/addons/lines/Line2.js";
 import { LineGeometry } from "three/addons/lines/LineGeometry.js";
 import { LineMaterial } from "three/addons/lines/LineMaterial.js";
-import { CHART_FORMAT, chartForGame } from "./src/chart-core.js?v=20260828-56";
-import { CONFIG } from "./src/config.js?v=20260828-56";
+import { CHART_FORMAT, chartForGame } from "./src/chart-core.js?v=20260828-70";
+import { CONFIG } from "./src/config.js?v=20260828-70";
+import { loadContentCatalog } from "./src/content-catalog.js?v=20260829-1";
+import { LocalPlayerProgressStore } from "./src/player-progress.js?v=20260828-1";
+import { createInputMap } from "./src/input-map.js?v=20260829-1";
 
 const gameConfig = CONFIG.game;
 const colorConfig = CONFIG.colors;
 
 const editorPreviewMode = new URLSearchParams(window.location.search).has("editorPreview");
+const launchParameters = new URLSearchParams(window.location.search);
+const selectedSongLaunch = launchParameters.has("song") && !editorPreviewMode;
+document.documentElement.classList.toggle("song-launch-loading", selectedSongLaunch);
 document.documentElement.classList.toggle("editor-preview", editorPreviewMode);
 let editorPreviewActive = !editorPreviewMode;
+let activeLaunch = null;
+const launchIntro = {
+  phase: "idle",
+  startedAt: 0,
+  progress: 1
+};
+const pauseState = {
+  paused: false,
+  frozenChartTime: 0,
+  escapeArmedUntil: 0,
+  hintTimer: 0
+};
+const gameplayAudio = new Audio();
+gameplayAudio.preload = "auto";
+const playerProgressStore = new LocalPlayerProgressStore();
 
 const canvas = document.getElementById("scene");
 const cameraModeReadout = document.getElementById("camera-mode");
@@ -72,6 +108,8 @@ const cameraTargetReadout = document.getElementById("camera-target");
 const cameraFovReadout = document.getElementById("camera-fov");
 const backgroundCountReadout = document.getElementById("background-count");
 const logicStateReadout = document.getElementById("logic-state");
+const comboDisplay = document.getElementById("combo-display");
+const comboLabel = document.getElementById("combo-label");
 const comboCountReadout = document.getElementById("combo-count");
 const scoreCountReadout = document.getElementById("score-count");
 const songProgressFill = document.getElementById("song-progress-fill");
@@ -82,6 +120,14 @@ const songJacket = document.getElementById("song-jacket");
 const difficultyBadge = document.getElementById("difficulty-badge");
 const difficultyNameReadout = document.getElementById("difficulty-name");
 const difficultyLevelReadout = document.getElementById("difficulty-level");
+const launchOverlay = document.getElementById("launch-overlay");
+const launchKicker = document.getElementById("launch-kicker");
+const launchTitle = document.getElementById("launch-title");
+const launchButton = document.getElementById("launch-button");
+const pauseOverlay = document.getElementById("pause-overlay");
+const pauseContinueButton = document.getElementById("pause-continue");
+const pauseRestartButton = document.getElementById("pause-restart");
+const pauseExitButton = document.getElementById("pause-exit");
 const renderer = new THREE.WebGLRenderer({
   canvas,
   antialias: true,
@@ -174,7 +220,7 @@ function resolveCameraProfile(
 
 applyCameraProfile();
 
-let debugFreeCamera = true;
+let debugFreeCamera = false;
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.enabled = debugFreeCamera;
 controls.enableDamping = true;
@@ -239,8 +285,11 @@ const editorRouteMaterials = new Set();
 const editorRouteBounds = new THREE.Sphere(new THREE.Vector3(), 1);
 let editorPreviewView = "play";
 
+const debugAxesRoot = new THREE.Group();
+debugAxesRoot.visible = false;
 const axesHelper = new THREE.AxesHelper(8);
-scene.add(axesHelper);
+debugAxesRoot.add(axesHelper);
+scene.add(debugAxesRoot);
 
 function makeAxisLabel(text, color) {
   const labelCanvas = document.createElement("canvas");
@@ -263,7 +312,7 @@ function makeAxisLabel(text, color) {
     depthWrite: false
   }));
   sprite.scale.setScalar(0.9);
-  scene.add(sprite);
+  debugAxesRoot.add(sprite);
   return sprite;
 }
 
@@ -329,22 +378,11 @@ function makeNoteGlowMaterial(color, opacity = 1, intensity = 1) {
   return makeForegroundGlowMaterial(color, opacity, intensity * gameConfig.rendering.noteGlowIntensity);
 }
 
-function makeSoftHaloTexture() {
-  const haloCanvas = document.createElement("canvas");
-  haloCanvas.width = 128;
-  haloCanvas.height = 128;
-  const context = haloCanvas.getContext("2d");
-  const gradient = context.createRadialGradient(64, 64, 0, 64, 64, 64);
-  gradient.addColorStop(0, "rgba(255,255,255,0.9)");
-  gradient.addColorStop(0.2, "rgba(255,255,255,0.52)");
-  gradient.addColorStop(0.55, "rgba(255,255,255,0.14)");
-  gradient.addColorStop(1, "rgba(255,255,255,0)");
-  context.fillStyle = gradient;
-  context.fillRect(0, 0, 128, 128);
-  return new THREE.CanvasTexture(haloCanvas);
+function makeNoteBodyMaterial(color, opacity = 1, intensity = 1) {
+  const material = makeNoteGlowMaterial(color, opacity, intensity);
+  material.blending = THREE.NormalBlending;
+  return material;
 }
-
-const softHaloTexture = makeSoftHaloTexture();
 
 function makeGradientLineMaterial() {
   return new THREE.ShaderMaterial({
@@ -375,8 +413,8 @@ function makeGradientLineMaterial() {
   });
 }
 
-const matMiddle = makeNoteGlowMaterial(palette.white, 0.99, 2.18);
-const matSpace = makeNoteGlowMaterial(palette.space, 0.99, 2.18);
+const matMiddle = makeNoteBodyMaterial(palette.white, 0.99, 2.18);
+const matSpace = makeNoteBodyMaterial(palette.space, 0.99, 2.18);
 
 const backgroundConfig = gameConfig.background;
 const sideTrajectoryPointCount = gameConfig.sideRails.pointCount;
@@ -1167,7 +1205,7 @@ function createNoteMesh(kind = "middle") {
         : palette.white;
   const mesh = new THREE.Mesh(
     sphereGeo,
-    isSpace ? matSpace.clone() : kind === "middle" ? matMiddle.clone() : makeNoteGlowMaterial(color, 0.99, 2.18)
+    isSpace ? matSpace.clone() : kind === "middle" ? matMiddle.clone() : makeNoteBodyMaterial(color, 0.99, 2.18)
   );
   const halo = new THREE.Mesh(
     noteHaloGeo,
@@ -1175,6 +1213,8 @@ function createNoteMesh(kind = "middle") {
   );
   halo.userData.baseOpacity = 0.56;
   halo.scale.setScalar(middleHaloScale);
+  halo.renderOrder = 1;
+  mesh.renderOrder = 2;
   mesh.add(halo);
   mesh.userData.halo = halo;
   if (isSpace) {
@@ -1342,31 +1382,73 @@ function makeTopArrowGeometry(width, height) {
   return new THREE.ShapeGeometry(shape);
 }
 
-function createLayeredArrowNote(geometry, color, haloSize = 3.8) {
+function geometrySurfaceArea(geometry) {
+  if (Number.isFinite(geometry.userData.surfaceArea)) return geometry.userData.surfaceArea;
+  const position = geometry.getAttribute("position");
+  const index = geometry.index;
+  let area = 0;
+  const a = new THREE.Vector3();
+  const b = new THREE.Vector3();
+  const c = new THREE.Vector3();
+  const ab = new THREE.Vector3();
+  const ac = new THREE.Vector3();
+  const triangleCount = index ? index.count / 3 : position.count / 3;
+  for (let triangle = 0; triangle < triangleCount; triangle += 1) {
+    const offset = triangle * 3;
+    const ai = index ? index.getX(offset) : offset;
+    const bi = index ? index.getX(offset + 1) : offset + 1;
+    const ci = index ? index.getX(offset + 2) : offset + 2;
+    a.fromBufferAttribute(position, ai);
+    b.fromBufferAttribute(position, bi);
+    c.fromBufferAttribute(position, ci);
+    area += ab.subVectors(b, a).cross(ac.subVectors(c, a)).length() * 0.5;
+  }
+  geometry.userData.surfaceArea = area;
+  return area;
+}
+
+const arrowNoteGeometries = Object.freeze({
+  left: makeChevronGeometry("left", 1.25, 1.25, 0.3),
+  right: makeChevronGeometry("right", 1.25, 1.25, 0.3),
+  top: makeTopArrowGeometry(1.9, 1.35)
+});
+const sideArrowSurfaceArea = geometrySurfaceArea(arrowNoteGeometries.left);
+
+function createLayeredArrowNote(geometry, color) {
   const group = new THREE.Group();
-  const softHalo = new THREE.Sprite(installReadableForegroundFog(new THREE.SpriteMaterial({
-    map: softHaloTexture,
-    color,
-    transparent: true,
-    opacity: gameConfig.rendering.noteSoftHaloOpacity,
-    blending: THREE.AdditiveBlending,
-    depthTest: false,
-    depthWrite: false,
-    fog: true
-  })));
-  const outerGlow = new THREE.Mesh(geometry, makeNoteGlowMaterial(color, 0.34, 1));
-  const glow = new THREE.Mesh(geometry, makeNoteGlowMaterial(color, 0.72, 1));
-  const arrow = new THREE.Mesh(geometry, makeNoteGlowMaterial(color, 0.99, 1));
-  softHalo.scale.setScalar(haloSize);
-  softHalo.userData.opacityScale = gameConfig.rendering.noteSoftHaloOpacity;
-  outerGlow.scale.setScalar(1.58);
+  const areaRatio = sideArrowSurfaceArea / Math.max(geometrySurfaceArea(geometry), 1e-6);
+  const glowEnergyScale = Math.min(1, Math.pow(areaRatio, renderConfig.arrowGlowAreaExponent));
+  const outerGlow = new THREE.Mesh(
+    geometry,
+    makeNoteGlowMaterial(
+      color,
+      renderConfig.arrowGlowOuterOpacity,
+      renderConfig.arrowGlowOuterIntensity * glowEnergyScale
+    )
+  );
+  const glow = new THREE.Mesh(
+    geometry,
+    makeNoteGlowMaterial(
+      color,
+      renderConfig.arrowGlowInnerOpacity,
+      renderConfig.arrowGlowInnerIntensity * glowEnergyScale
+    )
+  );
+  const arrow = new THREE.Mesh(
+    geometry,
+    makeNoteBodyMaterial(color, 0.99, renderConfig.arrowBodyIntensity)
+  );
+  outerGlow.scale.setScalar(renderConfig.arrowGlowOuterScale);
   outerGlow.position.z = -0.02;
-  glow.scale.setScalar(1.3);
+  glow.scale.setScalar(renderConfig.arrowGlowInnerScale);
   glow.position.z = -0.01;
-  outerGlow.userData.opacityScale = 0.34;
-  glow.userData.opacityScale = 0.72;
+  outerGlow.userData.opacityScale = renderConfig.arrowGlowOuterOpacity;
+  glow.userData.opacityScale = renderConfig.arrowGlowInnerOpacity;
   arrow.userData.opacityScale = 1;
-  group.add(softHalo, outerGlow, glow, arrow);
+  outerGlow.renderOrder = 0;
+  glow.renderOrder = 1;
+  arrow.renderOrder = 2;
+  group.add(outerGlow, glow, arrow);
   group.userData.baseScale = 1;
   group.userData.baseOpacity = 1;
   notesRoot.add(group);
@@ -1375,12 +1457,11 @@ function createLayeredArrowNote(geometry, color, haloSize = 3.8) {
 
 function createSideNoteMesh(direction) {
   const color = direction === "left" ? palette.left : palette.right;
-  const geometry = makeChevronGeometry(direction, 1.25, 1.25, 0.3);
-  return createLayeredArrowNote(geometry, color);
+  return createLayeredArrowNote(arrowNoteGeometries[direction], color);
 }
 
 function createTopNoteMesh() {
-  return createLayeredArrowNote(makeTopArrowGeometry(1.9, 1.35), palette.top, 4.2);
+  return createLayeredArrowNote(arrowNoteGeometries.top, palette.top);
 }
 
 function baseNoteType(noteOrType) {
@@ -1732,6 +1813,200 @@ function loadChart(chart) {
   rebuildBackgroundField();
 }
 
+function showLaunchOverlay(kicker, title, buttonLabel, action) {
+  launchKicker.textContent = kicker;
+  launchTitle.textContent = title;
+  launchButton.textContent = buttonLabel;
+  launchButton.onclick = action;
+  launchOverlay.hidden = false;
+}
+
+function hideLaunchOverlay() {
+  launchOverlay.hidden = true;
+  launchButton.onclick = null;
+}
+
+function hidePauseHint() {
+  comboDisplay.classList.remove("is-pause-armed");
+  comboLabel.textContent = "COMBO";
+  pauseState.escapeArmedUntil = 0;
+  if (pauseState.hintTimer) window.clearTimeout(pauseState.hintTimer);
+  pauseState.hintTimer = 0;
+}
+
+function armPauseShortcut() {
+  hidePauseHint();
+  pauseState.escapeArmedUntil = performance.now() + gameConfig.pause.escapeConfirmSeconds * 1000;
+  comboLabel.textContent = "Press ESC again to pause >w<";
+  comboDisplay.classList.add("is-pause-armed");
+  pauseState.hintTimer = window.setTimeout(() => {
+    hidePauseHint();
+  }, gameConfig.pause.escapeConfirmSeconds * 1000);
+}
+
+function pauseGame() {
+  if (!activeLaunch || launchIntro.phase !== "playing" || pauseState.paused) return;
+  pauseState.frozenChartTime = getLiveChartTime();
+  pauseState.paused = true;
+  gameplayAudio.pause();
+  hidePauseHint();
+  pauseOverlay.hidden = false;
+  pauseContinueButton.focus();
+}
+
+async function continueGame() {
+  if (!pauseState.paused) return;
+  await gameplayAudio.play();
+  pauseState.paused = false;
+  pauseOverlay.hidden = true;
+}
+
+async function restartGame() {
+  if (!activeLaunch) return;
+  gameplayAudio.pause();
+  pauseState.paused = false;
+  pauseState.frozenChartTime = 0;
+  pauseOverlay.hidden = true;
+  launchIntro.phase = "ready";
+  launchIntro.progress = 0;
+  activeLaunch.completed = false;
+  await startSelectedSongPlayback();
+}
+
+function exitGame() {
+  gameplayAudio.pause();
+  const target = new URL("./select.html", window.location.href);
+  target.searchParams.set("v", "20260828-5");
+  if (activeLaunch?.chapter?.id) target.searchParams.set("chapter", activeLaunch.chapter.id);
+  window.location.assign(target);
+}
+
+function handleEscapeShortcut() {
+  if (!activeLaunch || launchIntro.phase !== "playing") return;
+  if (pauseState.paused) return;
+  if (performance.now() <= pauseState.escapeArmedUntil) {
+    pauseGame();
+    return;
+  }
+  armPauseShortcut();
+}
+
+async function startSelectedSongPlayback() {
+  if (!activeLaunch || launchIntro.phase === "intro" || launchIntro.phase === "playing") return;
+  gameplayAudio.currentTime = 0;
+  gameplayAudio.muted = true;
+  await gameplayAudio.play();
+  pauseState.paused = false;
+  pauseState.frozenChartTime = 0;
+  pauseOverlay.hidden = true;
+  hidePauseHint();
+  resetGameplayState();
+  launchIntro.phase = "intro";
+  launchIntro.startedAt = clock.getElapsedTime();
+  launchIntro.progress = 0;
+  hideLaunchOverlay();
+}
+
+function updateLaunchIntro(t) {
+  if (!activeLaunch || launchIntro.phase !== "intro") return;
+  launchIntro.progress = THREE.MathUtils.clamp(
+    (t - launchIntro.startedAt) / gameConfig.launchIntro.durationSeconds,
+    0,
+    1
+  );
+  if (launchIntro.progress < 1) return;
+  gameplayAudio.currentTime = 0;
+  gameplayAudio.muted = false;
+  chartState.startTime = t;
+  launchIntro.phase = "playing";
+}
+
+function launchVisualProgress() {
+  if (!activeLaunch || launchIntro.phase === "playing") return 1;
+  if (launchIntro.phase !== "intro") return 0;
+  return launchIntro.progress * launchIntro.progress * (3 - 2 * launchIntro.progress);
+}
+
+function launchNoteOpacity(t) {
+  const progress = launchVisualProgress();
+  if (!activeLaunch || launchIntro.phase === "playing") return 1;
+  const flicker = 0.72 + 0.28 * Math.sin(t * gameConfig.launchIntro.noteFlickerSpeed);
+  return progress * THREE.MathUtils.clamp(flicker, 0, 1);
+}
+
+async function recordSelectedSongClear() {
+  if (!activeLaunch || activeLaunch.completed) return;
+  activeLaunch.completed = true;
+  const result = {
+    score: roundScoreLikeCapSonik(gameplayState.score),
+    maxCombo: gameplayState.maxCombo,
+    counts: structuredClone(gameplayState.counts)
+  };
+  await playerProgressStore.recordClear(activeLaunch.songId, activeLaunch.chart.file, result);
+  if (activeLaunch.chapter) await playerProgressStore.applyChapterUnlocks(activeLaunch.chapter);
+  sessionStorage.setItem("particlesoar.last-result", JSON.stringify({
+    songId: activeLaunch.songId,
+    chart: activeLaunch.chart.file,
+    chapterId: activeLaunch.chapter?.id ?? null,
+    result
+  }));
+  window.dispatchEvent(new CustomEvent("ParticleSoarChartComplete", { detail: result }));
+  const target = new URL("./result.html", window.location.href);
+  target.searchParams.set("v", "20260829-1");
+  window.location.assign(target);
+}
+
+async function loadSelectedSong() {
+  const songId = launchParameters.get("song");
+  if (!songId || editorPreviewMode) return false;
+  const catalog = await loadContentCatalog(
+    "./public/content/catalog.json?v=20260829-1",
+    globalThis.fetch,
+    { cache: "no-store" }
+  );
+  const song = catalog.getNode(songId);
+  if (!song || song.type !== "song") throw new Error(`Song not found: ${songId}`);
+  const manifest = await catalog.loadSongManifest(song);
+  const requestedChart = launchParameters.get("chart");
+  const chartEntry = manifest.charts.find((chart) => chart.file === requestedChart) ?? manifest.charts[0];
+  const response = await fetch(chartEntry.url, { cache: "no-store" });
+  if (!response.ok) throw new Error(`Failed to load chart (${response.status})`);
+  const chart = await response.json();
+  chart.meta = {
+    ...chart.meta,
+    title: manifest.title,
+    composer: manifest.composer,
+    illustrator: manifest.illustrator,
+    charter: chartEntry.charter ?? chart.meta?.charter,
+    difficultyLabel: chartEntry.difficultyLabel ?? chart.meta?.difficultyLabel,
+    level: chartEntry.level ?? chart.meta?.level,
+    ...(manifest.jacketUrl ? { jacket: manifest.jacketUrl } : {})
+  };
+
+  const chapterId = launchParameters.get("chapter");
+  const chapter = chapterId ? catalog.getNode(chapterId) : null;
+  activeLaunch = { catalog, songId, chapter, chart: chartEntry, completed: false };
+  launchIntro.phase = "ready";
+  launchIntro.progress = 0;
+  loadChart(chart);
+  setFreeCamera(false);
+  document.documentElement.classList.remove("song-launch-loading");
+  gameplayAudio.src = manifest.audioUrl;
+  gameplayAudio.addEventListener("ended", () => recordSelectedSongClear().catch(console.error), { once: true });
+
+  showLaunchOverlay("READY", manifest.title, "START", () => {
+    startSelectedSongPlayback().catch(() => {
+      showLaunchOverlay("AUDIO PAUSED", manifest.title, "START", () => startSelectedSongPlayback());
+    });
+  });
+  try {
+    await startSelectedSongPlayback();
+  } catch {
+    // Browsers may require the explicit START action after navigation.
+  }
+  return true;
+}
+
 function createDemoChart() {
   const beatCount = 32;
   const duration = 11.2;
@@ -1852,7 +2127,7 @@ function makeEllipseTubeGeometry(radiusX, radiusY, tubeRadius) {
 const receiverRing = new THREE.Mesh(
   makeEllipseTubeGeometry(playfieldConfig.receiverRadius, playfieldConfig.receiverRadius, 0.032),
   makeForegroundGlowMaterial(
-    0xeaf7ff,
+    palette.white,
     renderConfig.receiverGlowOpacity,
     renderConfig.receiverGlowIntensity
   )
@@ -1898,7 +2173,10 @@ function writeSideTrajectoryGeometry(rail, worldPoints, pointCount) {
     positions[offset++] = worldPoints[i + 1].y;
     positions[offset++] = worldPoints[i + 1].z;
   }
-  rail.geometry.setDrawRange(0, (pointCount - 1) * 2);
+  const introSegmentCount = activeLaunch && launchIntro.phase !== "playing"
+    ? Math.floor((pointCount - 1) * launchVisualProgress())
+    : pointCount - 1;
+  rail.geometry.setDrawRange(0, Math.max(0, introSegmentCount) * 2);
   rail.geometry.getAttribute("position").needsUpdate = true;
 }
 
@@ -1955,7 +2233,7 @@ function syncPlayfieldVisuals() {
 const landingHintGeo = new THREE.TorusGeometry(0.34, 0.018, 40, 6);
 landingHintGeo.rotateX(Math.PI / 2);
 function acquireLandingHint() {
-  const hint = new THREE.Mesh(landingHintGeo, makeForegroundGlowMaterial(0xeaf7ff, 0.18));
+  const hint = new THREE.Mesh(landingHintGeo, makeForegroundGlowMaterial(palette.white, 0.18));
   hint.material.depthTest = false;
   hint.renderOrder = 12;
   hint.visible = false;
@@ -2275,10 +2553,18 @@ function postEditorPreviewCamera(time) {
 }
 
 loadChart(createDemoChart());
+loadSelectedSong().catch((error) => {
+  console.error(error);
+  document.documentElement.classList.remove("song-launch-loading");
+  showLaunchOverlay("LOAD FAILED", error.message, "BACK", () => {
+    window.location.assign(new URL("./select.html", window.location.href));
+  });
+});
 
 function setFreeCamera(enabled) {
   debugFreeCamera = Boolean(enabled);
   controls.enabled = debugFreeCamera;
+  debugAxesRoot.visible = debugFreeCamera && editorPreviewMode;
   cameraModeReadout.textContent = debugFreeCamera ? "free" : "play";
   if (!debugFreeCamera) {
     camera.up.set(0, 1, 0);
@@ -2342,29 +2628,29 @@ if (editorPreviewMode) {
   window.parent.postMessage({ type: "ParticleSoarPreviewReady" }, window.location.origin);
 }
 
-const leftKeyCodes = new Set(gameConfig.input.left);
-const rightKeyCodes = new Set(gameConfig.input.right);
-const middleKeyCodes = new Set(gameConfig.input.middle);
-const topKeyCodes = new Set(gameConfig.input.top);
-
-const gameplayKeyCodes = new Set([
-  ...leftKeyCodes,
-  ...rightKeyCodes,
-  ...middleKeyCodes,
-  ...topKeyCodes,
-  ...gameConfig.input.space
-]);
+const inputMap = createInputMap(gameConfig.input);
+const gameplayKeyCodes = inputMap.keyCodes;
 
 const judgementOrder = ["flawless", "prime", "decent", "loose"];
 
 function normalizeChartTime(chartTime) {
   const duration = timingConfig.chartDuration;
+  if (activeLaunch) return THREE.MathUtils.clamp(chartTime, 0, duration);
   return ((chartTime % duration) + duration) % duration;
 }
 
 function getLiveChartTime() {
   if (chartState.previewTime !== null) {
     return THREE.MathUtils.clamp(chartState.previewTime, 0, timingConfig.chartDuration);
+  }
+  if (activeLaunch) {
+    if (pauseState.paused) return pauseState.frozenChartTime;
+    if (launchIntro.phase !== "playing") return 0;
+    return THREE.MathUtils.clamp(
+      gameplayAudio.currentTime - (Number(timingConfig.audioOffset) || 0),
+      0,
+      timingConfig.chartDuration
+    );
   }
   return normalizeChartTime(clock.getElapsedTime() - chartState.startTime);
 }
@@ -2655,12 +2941,7 @@ function tryJudgeInputType(inputType, code, judgeChartTime) {
 }
 
 function inputTypesForCode(code) {
-  if (code === "Space") return ["space"];
-  if (leftKeyCodes.has(code)) return ["left"];
-  if (rightKeyCodes.has(code)) return ["right"];
-  if (topKeyCodes.has(code)) return ["top"];
-  if (middleKeyCodes.has(code)) return ["middle"];
-  return [];
+  return inputMap.inputTypesForCode(code);
 }
 
 function releaseGameplayKey(code, judgeChartTime) {
@@ -2749,12 +3030,14 @@ window.addEventListener("keydown", (event) => {
     }
     return;
   }
-  if (event.code === "Equal") {
+  if (event.code === "Escape") {
     event.preventDefault();
     if (event.repeat) return;
-    setFreeCamera(!debugFreeCamera);
+    handleEscapeShortcut();
     return;
   }
+  if (pauseState.paused) return;
+  if (activeLaunch && launchIntro.phase !== "playing") return;
   if (!gameplayKeyCodes.has(event.code)) return;
   event.preventDefault();
   if (event.repeat) return;
@@ -2773,18 +3056,32 @@ window.addEventListener("keydown", (event) => {
 
 window.addEventListener("keyup", (event) => {
   if (editorPreviewMode) return;
+  if (pauseState.paused) return;
   if (!gameplayKeyCodes.has(event.code)) return;
   event.preventDefault();
   releaseGameplayKey(event.code, getJudgeChartTime());
 });
 
 window.addEventListener("blur", () => {
+  if (pauseState.paused) return;
   releaseAllGameplayKeys(getJudgeChartTime());
 });
 
 document.addEventListener("visibilitychange", () => {
-  if (document.hidden) releaseAllGameplayKeys(getJudgeChartTime());
+  if (document.hidden && !pauseState.paused) releaseAllGameplayKeys(getJudgeChartTime());
 });
+
+pauseContinueButton.addEventListener("click", () => {
+  continueGame().catch(() => {
+    pauseOverlay.hidden = false;
+  });
+});
+pauseRestartButton.addEventListener("click", () => {
+  restartGame().catch(() => {
+    showLaunchOverlay("AUDIO PAUSED", activeLaunch?.songId ?? "ParticleSoar", "START", () => startSelectedSongPlayback());
+  });
+});
+pauseExitButton.addEventListener("click", exitGame);
 
 function easeInCubic(t) {
   return t * t * t;
@@ -2808,7 +3105,7 @@ function noteVisibility(progress, timeToHit) {
 function capturedNoteVisibility(note, chartTime) {
   if (note.capturedAtChartTime === null) return 1;
   let elapsed = chartTime - note.capturedAtChartTime;
-  if (elapsed < 0) elapsed += timingConfig.chartDuration;
+  if (elapsed < 0 && !activeLaunch) elapsed += timingConfig.chartDuration;
   const fadeSeconds = note.earlyLoose ? 0.22 : 0.09;
   return 1 - smoothstep(0, fadeSeconds, elapsed);
 }
@@ -2830,7 +3127,7 @@ function noteTravelFactor(progress) {
 
 function timeUntilHit(hitTime, chartTime, wrap = true) {
   let dt = hitTime - chartTime;
-  if (wrap && dt < -timingConfig.postHitSeconds) dt += timingConfig.chartDuration;
+  if (wrap && !activeLaunch && dt < -timingConfig.postHitSeconds) dt += timingConfig.chartDuration;
   return dt;
 }
 
@@ -3078,10 +3375,11 @@ function updateHoldNoteVisual(note, segment, opacity, t, chartTime) {
 
 function updateNotes(t, chartTime) {
   const visibleNotes = [];
+  const introOpacity = launchNoteOpacity(t);
   notes.forEach((note) => {
     if (isHoldNote(note)) {
       const segment = holdSegment(note, chartTime);
-      const opacity = note.mesh.userData.baseOpacity
+      const opacity = introOpacity * note.mesh.userData.baseOpacity
         * holdVisibility(segment.head.progress, segment.tail.timeToHit)
         * holdStateOpacity(note);
       updateHoldNoteVisual(note, segment, opacity, t, chartTime);
@@ -3107,7 +3405,7 @@ function updateNotes(t, chartTime) {
     const scale = note.mesh.userData.baseScale * (1 + pulseScale);
     const visibility = noteVisibility(progress, timeToHit) * capturedNoteVisibility(note, chartTime);
     const hitFlash = isPlayable ? (note.mesh.userData.hitFlash ?? 0) : 0;
-    const opacity = note.mesh.userData.baseOpacity * visibility * (1 + hitFlash * 0.45);
+    const opacity = introOpacity * note.mesh.userData.baseOpacity * visibility * (1 + hitFlash * 0.45);
 
     updateSphereNoteVisual(note.mesh, opacity, scale, hitFlash);
     if (isSpaceNote(note)) updateSpaceSatellites(note, t, opacity);
@@ -3134,8 +3432,12 @@ function updateLandingHints(visibleNotes) {
 
   let hintIndex = 0;
   const hintWindow = 1;
-  const baseOpacity = chartState.motionMode === "receiver-catch" ? 0.28 : 0.08;
-  const hitOpacity = chartState.motionMode === "receiver-catch" ? 0.28 : 0.22;
+  const baseOpacity = chartState.motionMode === "receiver-catch"
+    ? renderConfig.landingHintBaseOpacity
+    : 0.08;
+  const hitOpacity = chartState.motionMode === "receiver-catch"
+    ? renderConfig.landingHintHitOpacity
+    : 0.22;
   const baseScale = chartState.motionMode === "receiver-catch" ? 1.0 : 0.75;
   const hitScale = chartState.motionMode === "receiver-catch" ? 0.42 : 0.65;
   visibleNotes.forEach((item) => {
@@ -3167,8 +3469,12 @@ function writeConnectionGeometry(line, a, b, color, opacityScale, opacityOverrid
   const delta = end.clone().sub(start);
   if (delta.length() <= 0.001) return false;
 
-  const viewDirection = camera.position.clone().sub(start.clone().add(end).multiplyScalar(0.5)).normalize();
-  const side = delta.clone().cross(viewDirection).normalize().multiplyScalar(renderConfig.multiHitLineWidth * 0.5);
+  const midpoint = start.clone().add(end).multiplyScalar(0.5);
+  const cameraDistance = camera.position.distanceTo(midpoint);
+  const distanceScale = Math.max(1, cameraDistance / renderConfig.connectionReferenceDistance);
+  const viewDirection = camera.position.clone().sub(midpoint).normalize();
+  const side = delta.clone().cross(viewDirection).normalize()
+    .multiplyScalar(renderConfig.multiHitLineWidth * distanceScale * 0.5);
   const positions = [];
   const colors = [];
   const alphas = [];
@@ -3268,6 +3574,10 @@ function updateNoteConnectionLines(visibleNotes) {
 }
 
 function updateReceiver(t, beat) {
+  const receiverIntroScale = activeLaunch && launchIntro.phase !== "playing"
+    ? THREE.MathUtils.lerp(gameConfig.launchIntro.receiverStartScale, 1, launchVisualProgress())
+    : 1;
+  receiverGroup.scale.setScalar(receiverIntroScale);
   receiverRing.scale.setScalar(1 + beat * 0.018);
   const pulsePhase = 0.5 + 0.5 * Math.sin(t * sideRailVisual.pulseSpeed);
   const railPulse = sideRailVisual.minPulse + (1 - sideRailVisual.minPulse) * pulsePhase;
@@ -3318,6 +3628,7 @@ function animate() {
   const t = clock.getElapsedTime();
   const beat = 0.5 + 0.5 * Math.sin(t * Math.PI * 2 * 1.2);
   const slowBeat = 0.5 + 0.5 * Math.sin(t * Math.PI * 2 * 0.4);
+  updateLaunchIntro(t);
 
   if (t > gameplayState.feedbackUntil && logicStateReadout.textContent !== "on") {
     logicStateReadout.textContent = "on";
@@ -3325,7 +3636,9 @@ function animate() {
 
   chartState.chartTime = getLiveChartTime();
   songProgressFill.style.width = `${THREE.MathUtils.clamp(chartState.chartTime / Math.max(timingConfig.chartDuration, 0.001), 0, 1) * 100}%`;
-  if (!editorPreviewMode) advanceGameplay(chartState.chartTime);
+  if (!editorPreviewMode && (!activeLaunch || launchIntro.phase === "playing")) {
+    advanceGameplay(chartState.chartTime);
+  }
   updateReceiverAnchor();
   updateSideTrajectories(chartState.chartTime);
   const visibleNotes = updateNotes(t, chartState.chartTime);
@@ -3345,6 +3658,9 @@ function animate() {
   updateReceiver(t, beat);
   updateHitEffects(t);
   updateBackgroundParticles(t);
+  const backgroundIntroOpacity = launchVisualProgress();
+  particles.material.opacity = backgroundConfig.pointOpacity * backgroundIntroOpacity;
+  backgroundTriangleMesh.material.opacity = backgroundConfig.triangleOpacity * backgroundIntroOpacity;
 
   composer.render();
   requestAnimationFrame(animate);
@@ -3469,6 +3785,17 @@ body {
   letter-spacing: 0;
 }
 
+.combo-display.is-pause-armed {
+  width: min(420px, 84vw);
+}
+
+.combo-display.is-pause-armed span {
+  color: rgba(221, 231, 235, 0.88);
+  font-size: 12px;
+  font-weight: 600;
+  text-shadow: 0 0 14px rgba(112, 220, 255, 0.34);
+}
+
 .brand {
   display: flex;
   align-items: center;
@@ -3588,24 +3915,164 @@ body {
 }
 
 .camera-debug {
-  position: absolute;
-  right: 28px;
-  bottom: 24px;
-  min-width: 238px;
-  padding: 10px 12px;
-  border: 1px solid rgba(234, 247, 255, 0.14);
-  background: rgba(4, 7, 13, 0.42);
-  color: rgba(234, 247, 255, 0.74);
-  font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
-  font-size: 11px;
-  line-height: 1.55;
-  letter-spacing: 0;
-  pointer-events: none;
-  backdrop-filter: blur(10px);
+  display: none;
 }
 
 .camera-debug span {
   color: rgba(234, 247, 255, 0.96);
+}
+
+.launch-overlay {
+  position: absolute;
+  z-index: 50;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  background: rgba(3, 6, 11, 0.78);
+  backdrop-filter: blur(8px);
+}
+
+.launch-overlay[hidden] {
+  display: none;
+}
+
+.launch-overlay span {
+  color: #70dcff;
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.launch-overlay strong {
+  margin-top: 8px;
+  color: #dde3e7;
+  font-size: 28px;
+  font-weight: 650;
+}
+
+.launch-overlay button {
+  width: 126px;
+  height: 42px;
+  margin-top: 24px;
+  border: 1px solid rgba(112, 220, 255, 0.72);
+  border-radius: 2px;
+  background: rgba(7, 15, 23, 0.9);
+  color: #dde3e7;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 750;
+  cursor: pointer;
+  box-shadow: 0 0 18px rgba(112, 220, 255, 0.18);
+}
+
+.launch-overlay button:hover,
+.launch-overlay button:focus-visible {
+  border-color: #70dcff;
+  outline: none;
+  box-shadow: 0 0 24px rgba(112, 220, 255, 0.34);
+}
+
+.song-launch-loading #scene,
+.song-launch-loading .song-progress,
+.song-launch-loading .hud,
+.song-launch-loading .combo-display,
+.song-launch-loading .difficulty-display,
+.song-launch-loading .camera-debug {
+  visibility: hidden;
+}
+
+.pause-overlay[hidden] {
+  display: none;
+}
+
+.pause-overlay {
+  position: absolute;
+  z-index: 55;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: rgba(2, 5, 9, 0.72);
+  backdrop-filter: blur(9px);
+}
+
+.pause-panel {
+  position: relative;
+  width: min(340px, calc(100vw - 40px));
+  padding: 28px 30px 30px;
+  border-top: 1px solid rgba(112, 220, 255, 0.68);
+  border-bottom: 1px solid rgba(255, 112, 170, 0.42);
+  background: rgba(5, 10, 17, 0.88);
+  text-align: center;
+  box-shadow: 0 0 34px rgba(112, 220, 255, 0.1);
+}
+
+.pause-panel::before,
+.pause-panel::after {
+  position: absolute;
+  top: -4px;
+  width: 8px;
+  height: 8px;
+  border-top: 1px solid #70dcff;
+  content: "";
+}
+
+.pause-panel::before {
+  left: 0;
+  border-left: 1px solid #70dcff;
+}
+
+.pause-panel::after {
+  right: 0;
+  border-right: 1px solid #70dcff;
+}
+
+.pause-panel h2 {
+  margin: 0 0 24px;
+  color: #dde3e7;
+  font-size: 30px;
+  font-weight: 600;
+  letter-spacing: 0;
+  text-shadow: 0 0 18px rgba(112, 220, 255, 0.3);
+}
+
+.pause-actions {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 8px;
+}
+
+.pause-actions button {
+  --pause-action-color: #9af2c5;
+  height: 39px;
+  border: 0;
+  border-left: 2px solid color-mix(in srgb, var(--pause-action-color) 62%, transparent);
+  border-radius: 0;
+  color: color-mix(in srgb, var(--pause-action-color) 78%, #dde3e7 22%);
+  background: rgba(13, 21, 30, 0.68);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 650;
+  text-align: left;
+  padding: 0 15px;
+  cursor: pointer;
+  transition: color 120ms ease, border-color 120ms ease, background 120ms ease;
+}
+
+.pause-actions button:nth-child(2) {
+  --pause-action-color: #ffd66b;
+}
+
+.pause-actions button:nth-child(3) {
+  --pause-action-color: #ff6f87;
+}
+
+.pause-actions button:hover,
+.pause-actions button:focus-visible {
+  border-color: var(--pause-action-color);
+  outline: none;
+  color: color-mix(in srgb, var(--pause-action-color) 86%, white 14%);
+  background: color-mix(in srgb, var(--pause-action-color) 10%, rgba(13, 21, 30, 0.88));
 }
 
 .editor-preview .song-progress,
@@ -3613,7 +4080,9 @@ body {
 .editor-preview .debug-status,
 .editor-preview .combo-display,
 .editor-preview .difficulty-display,
-.editor-preview .camera-debug {
+.editor-preview .camera-debug,
+.editor-preview .launch-overlay,
+.editor-preview .pause-overlay {
   display: none;
 }
 
