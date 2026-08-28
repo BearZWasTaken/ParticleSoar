@@ -75,6 +75,7 @@ import { CONFIG } from "./src/config.js?v=20260828-70";
 import { loadContentCatalog } from "./src/content-catalog.js?v=20260829-1";
 import { LocalPlayerProgressStore } from "./src/player-progress.js?v=20260828-1";
 import { createInputMap } from "./src/input-map.js?v=20260829-1";
+import { HitSoundPlayer } from "./src/hit-sounds.js?v=20260829-2";
 
 const gameConfig = CONFIG.game;
 const colorConfig = CONFIG.colors;
@@ -99,6 +100,10 @@ const pauseState = {
 };
 const gameplayAudio = new Audio();
 gameplayAudio.preload = "auto";
+const hitSoundPlayer = new HitSoundPlayer({
+  urls: gameConfig.audio.hitSounds,
+  volume: gameConfig.audio.hitSoundVolume
+});
 const playerProgressStore = new LocalPlayerProgressStore();
 
 const canvas = document.getElementById("scene");
@@ -1625,6 +1630,7 @@ function spawnNote(rawNote, index = 0) {
     wPos: rawNote.wPos ?? localX,
     depthOffset,
     zone,
+    tailZone,
     startPosition,
     hitPosition,
     tailHitPosition,
@@ -1893,6 +1899,7 @@ function handleEscapeShortcut() {
 
 async function startSelectedSongPlayback() {
   if (!activeLaunch || launchIntro.phase === "intro" || launchIntro.phase === "playing") return;
+  hitSoundPlayer.unlock().catch(() => {});
   gameplayAudio.currentTime = 0;
   gameplayAudio.muted = true;
   await gameplayAudio.play();
@@ -1986,6 +1993,7 @@ async function loadSelectedSong() {
   const chapterId = launchParameters.get("chapter");
   const chapter = chapterId ? catalog.getNode(chapterId) : null;
   activeLaunch = { catalog, songId, chapter, chart: chartEntry, completed: false };
+  await hitSoundPlayer.preload();
   launchIntro.phase = "ready";
   launchIntro.progress = 0;
   loadChart(chart);
@@ -2276,12 +2284,12 @@ function resetHitEffects() {
   });
 }
 
-function spawnHitEffect(note) {
+function spawnHitEffect(note, position = note.hitPosition, zone = note.zone) {
   const color = noteColor(note);
-  const origin = note.hitPosition;
-  const axisA = note.zone.judgeLineDirection;
-  const axisB = note.zone.depthDirection;
-  const fallAxis = note.zone.fallDirection;
+  const origin = position;
+  const axisA = zone.judgeLineDirection;
+  const axisB = zone.depthDirection;
+  const fallAxis = zone.fallDirection;
   const spawnedAt = clock.getElapsedTime();
 
   for (let i = 0; i < renderConfig.hitParticlesPerBurst; i += 1) {
@@ -2795,7 +2803,12 @@ function finalizeNote(note, judgement, judgeChartTime) {
     flashJudgedNote(note);
     if (!isHoldNote(note)) {
       note.capturedAtChartTime = judgeChartTime;
-      if (judgement !== "loose") spawnHitEffect(note);
+      if (judgement !== "loose") {
+        spawnHitEffect(note);
+        hitSoundPlayer.playJudgement(judgement);
+      }
+    } else if (judgement !== "loose") {
+      spawnHitEffect(note, note.tailHitPosition, note.tailZone);
     }
   }
   showJudgementFeedback(judgement);
@@ -2835,7 +2848,10 @@ function beginHold(note, judgement, judgeChartTime, code) {
   gameplayState.activeHolds.add(note);
   bindKeyToHold(note, code);
   flashJudgedNote(note);
-  if (judgement !== "loose") spawnHitEffect(note);
+  if (judgement !== "loose") {
+    spawnHitEffect(note);
+    hitSoundPlayer.playJudgement(judgement);
+  }
   showJudgementFeedback(judgement);
 }
 
@@ -3041,6 +3057,7 @@ window.addEventListener("keydown", (event) => {
   if (!gameplayKeyCodes.has(event.code)) return;
   event.preventDefault();
   if (event.repeat) return;
+  hitSoundPlayer.unlock().catch(() => {});
 
   const judgeChartTime = getJudgeChartTime();
   syncGameplayCycle(judgeChartTime);

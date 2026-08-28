@@ -236,6 +236,13 @@ export const CONFIG = deepFreeze({
     ui: {
       scoreDigits: 7
     },
+    audio: {
+      hitSoundVolume: 0.7,
+      hitSounds: {
+        prime: "./public/audio/sfx/hit-prime.wav",
+        decent: "./public/audio/sfx/hit-decent.wav"
+      }
+    },
     input: {
       left: ["Backquote", "Tab", "CapsLock", "ShiftLeft", "Digit1", "Digit2", "Digit3", "KeyQ", "KeyW", "KeyE", "KeyA", "KeyS", "KeyD", "KeyZ", "KeyX"],
       right: ["Digit0", "KeyO", "KeyP", "BracketLeft", "BracketRight", "Backslash", "KeyK", "KeyL", "Semicolon", "Quote", "Enter", "Comma", "Period", "Slash", "ShiftRight", "Minus", "Equal", "Backspace"],
