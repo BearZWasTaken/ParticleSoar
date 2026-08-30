@@ -1,3 +1,12 @@
+<script>
+(() => {
+  const parameters = new URLSearchParams(window.location.search);
+  if (!parameters.has("song") && !parameters.has("editorPreview")) {
+    document.documentElement.style.visibility = "hidden";
+    window.location.replace(new URL("./select.html", window.location.href));
+  }
+})();
+</script>
 <link rel="stylesheet" href="./ui-components.css?v=20260829-1">
 <div id="app">
   <canvas id="scene" aria-label="ParticleSoar visual demo"></canvas>
