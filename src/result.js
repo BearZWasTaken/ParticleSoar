@@ -71,7 +71,7 @@ function renderAccuracy(result) {
     const distance = Math.abs(index - 5) / 5;
     const hue = 132 + (48 - 132) * distance;
     column.className = `accuracy-column${index === 5 ? " center" : ""}`;
-    column.style.setProperty("--bar-height", `${Math.max(count > 0 ? 8 : 1, count / maximum * 100)}%`);
+    column.style.setProperty("--bar-height", `${count / maximum * 100}%`);
     column.style.setProperty("--accuracy-bar-color", `hsl(${hue} 84% 65%)`);
     column.setAttribute("aria-label", `${ranges[index]}: ${count}`);
     column.title = ranges[index];
