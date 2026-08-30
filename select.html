@@ -4,7 +4,8 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>ParticleSoar - First Flight</title>
-  <link rel="stylesheet" href="./select.css?v=20260828-5">
+  <link rel="stylesheet" href="./ui-components.css?v=20260829-1">
+  <link rel="stylesheet" href="./select.css?v=20260830-3">
 </head>
 <body>
   <canvas id="starfield" aria-hidden="true"></canvas>
@@ -14,9 +15,8 @@
       <span id="chapter-subtitle">CHAPTER 01</span>
       <h1 id="chapter-title">First Flight</h1>
     </div>
-    <div class="profile-state">
-      <span>LOCAL PROFILE</span>
-      <strong id="progress-count">0 / 0</strong>
+    <div class="header-actions">
+      <button type="button" class="ps-button" id="open-settings">Settings</button>
     </div>
   </header>
 
@@ -35,6 +35,6 @@
   </aside>
 
   <div id="loading-state" class="loading-state">LOADING CONSTELLATION</div>
-  <script type="module" src="./src/song-select.js?v=20260829-1"></script>
+  <script type="module" src="./src/song-select.js?v=20260830-3"></script>
 </body>
 </html>

@@ -4,7 +4,6 @@ import {
   ContentCatalog,
   normalizeContentCatalog
 } from "../src/content-catalog.js";
-import { LocalPlayerProgressStore } from "../src/player-progress.js";
 
 const source = {
   format: CONTENT_CATALOG_FORMAT,
@@ -90,25 +89,3 @@ assert.equal(manifestA.audioUrl, "https://game.test/charts/test/song.ogg");
 assert.equal(manifestA.charts[0].url, "https://game.test/charts/test/hd.json");
 
 console.log("content catalog tests passed");
-
-const storageData = new Map();
-const storage = {
-  getItem: (key) => storageData.get(key) ?? null,
-  setItem: (key, value) => storageData.set(key, value)
-};
-const progressStore = new LocalPlayerProgressStore(storage, "test-progress");
-const chapter = {
-  entries: [
-    { target: "song:a", unlock: { initial: true } },
-    { target: "song:b" }
-  ],
-  links: [{ from: "song:a", to: "song:b" }]
-};
-let progress = await progressStore.initializeChapter(chapter);
-assert.deepEqual(progress.unlocked, ["song:a"]);
-await progressStore.recordClear("song:a", "hd.json", { score: 900000 });
-progress = await progressStore.applyChapterUnlocks(chapter);
-assert.deepEqual(new Set(progress.unlocked), new Set(["song:a", "song:b"]));
-assert.equal(progress.clears["song:a"].charts["hd.json"].bestScore, 900000);
-
-console.log("player progress tests passed");

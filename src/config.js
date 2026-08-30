@@ -7,6 +7,16 @@ function deepFreeze(value) {
 }
 
 export const CONFIG = deepFreeze({
+  player: {
+    defaultSettings: {
+      chartDelayMs: 0,
+      inputDelayMs: 0,
+      musicVolume: 0.8,
+      hitSoundVolume: 0.7,
+      flowSpeedMultiplier: 1,
+      autoPauseOnBlur: true
+    }
+  },
   chart: {
     format: "ParticleSoarChart/v1",
     trajectorySampleSeconds: 0.04,
@@ -237,7 +247,6 @@ export const CONFIG = deepFreeze({
       scoreDigits: 7
     },
     audio: {
-      hitSoundVolume: 0.7,
       hitSounds: {
         prime: "./public/audio/sfx/hit-prime.wav",
         decent: "./public/audio/sfx/hit-decent.wav"

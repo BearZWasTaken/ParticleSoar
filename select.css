@@ -40,8 +40,16 @@ body { position: relative; }
   pointer-events: none;
 }
 
-.chapter-header span,
-.profile-state span {
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  pointer-events: auto;
+}
+
+.header-actions .ps-button { min-width: 92px; }
+
+.chapter-header span {
   display: block;
   color: var(--cyan);
   font-size: 12px;
@@ -54,20 +62,6 @@ body { position: relative; }
   font-size: 32px;
   font-weight: 650;
   letter-spacing: 0;
-}
-
-.profile-state {
-  padding-top: 2px;
-  text-align: right;
-}
-
-.profile-state span { color: var(--muted); }
-
-.profile-state strong {
-  display: block;
-  margin-top: 7px;
-  font-size: 18px;
-  font-variant-numeric: tabular-nums;
 }
 
 .constellation {
@@ -236,7 +230,7 @@ body { position: relative; }
   position: relative;
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: center;
   min-width: 0;
   height: 10px;
   padding: 0 3px 0 7px;
@@ -262,29 +256,38 @@ body { position: relative; }
   box-shadow: 0 0 4px color-mix(in srgb, var(--difficulty-color) 72%, transparent);
 }
 
-.difficulty-choice strong,
-.difficulty-choice span {
-  display: block;
-  font-size: 5px;
+.difficulty-choice-identity {
+  display: flex;
+  min-width: 0;
+  align-items: baseline;
   letter-spacing: 0;
 }
 
-.difficulty-choice strong {
+.difficulty-choice-identity { gap: 2px; }
+
+.difficulty-choice-identity strong {
   color: var(--difficulty-color);
+  font-size: 6px;
   font-weight: 800;
 }
 
-.difficulty-choice span {
+.difficulty-choice-identity b {
   color: rgba(238, 243, 245, 0.86);
+  font-size: 5.5px;
   font-weight: 650;
   font-variant-numeric: tabular-nums;
 }
 
 .difficulty-picker[data-count="1"] .difficulty-choice {
-  height: 18px;
+  height: 22px;
   padding-right: 6px;
   padding-left: 9px;
   border-top: 1px solid rgba(221, 227, 231, 0.12);
+}
+
+.difficulty-picker[data-count="1"] .difficulty-choice-identity {
+  justify-content: center;
+  gap: 4px;
 }
 
 .difficulty-picker[data-count="1"] .difficulty-choice::before {
@@ -292,22 +295,18 @@ body { position: relative; }
   bottom: 4px;
 }
 
-.difficulty-picker[data-count="1"] .difficulty-choice strong,
-.difficulty-picker[data-count="1"] .difficulty-choice span {
-  font-size: 7px;
-}
+.difficulty-picker[data-count="1"] .difficulty-choice-identity strong { font-size: 10px; }
+.difficulty-picker[data-count="1"] .difficulty-choice-identity b { font-size: 9px; }
 
 .difficulty-picker[data-count="2"] .difficulty-choice,
 .difficulty-picker[data-count="3"] .difficulty-choice {
-  height: 14px;
+  height: 16px;
 }
 
-.difficulty-picker[data-count="2"] .difficulty-choice strong,
-.difficulty-picker[data-count="2"] .difficulty-choice span,
-.difficulty-picker[data-count="3"] .difficulty-choice strong,
-.difficulty-picker[data-count="3"] .difficulty-choice span {
-  font-size: 6px;
-}
+.difficulty-picker[data-count="2"] .difficulty-choice-identity strong,
+.difficulty-picker[data-count="3"] .difficulty-choice-identity strong { font-size: 7px; }
+.difficulty-picker[data-count="2"] .difficulty-choice-identity b,
+.difficulty-picker[data-count="3"] .difficulty-choice-identity b { font-size: 6px; }
 
 .difficulty-choice:hover,
 .difficulty-choice:focus-visible {
@@ -320,7 +319,7 @@ body { position: relative; }
 .song-info {
   position: fixed;
   z-index: 25;
-  width: min(310px, calc(100vw - 36px));
+  width: min(390px, calc(100vw - 36px));
   padding: 14px 16px;
   border: 1px solid rgba(112, 220, 255, 0.42);
   border-radius: 4px;
@@ -351,18 +350,66 @@ body { position: relative; }
 }
 
 .song-difficulties {
-  display: flex;
-  gap: 10px;
+  display: grid;
+  gap: 6px;
   margin-top: 11px;
 }
 
 .song-difficulty {
-  padding: 4px 8px;
+  display: grid;
+  align-items: baseline;
+  grid-template-columns: max-content max-content max-content;
+  justify-content: start;
+  gap: 12px;
+  padding: 7px 12px;
   border-left: 2px solid var(--difficulty-color, var(--cyan));
   color: #dce4e8;
   background: rgba(8, 13, 20, 0.82);
   font-size: 12px;
   font-weight: 700;
+}
+
+.song-difficulty strong { font-size: 17px; font-weight: 700; }
+.song-difficulty .record-grade { font-size: 19px; }
+.song-difficulty small {
+  color: #c9d2d7;
+  font: 16px ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+.song-difficulty.is-new {
+  grid-template-columns: max-content max-content;
+}
+
+.song-difficulty.is-new small {
+  color: #e4ecef;
+  font-family: inherit;
+  font-weight: 750;
+}
+
+.record-grade {
+  color: #eef3f5;
+  font-family: Georgia, "Times New Roman", serif;
+  font-weight: 500;
+  line-height: 1;
+  text-shadow: 0 0 8px currentColor;
+}
+
+.record-grade[data-tone="gray"] { color: #77828a; }
+.record-grade[data-tone="pink"] { color: #ff78b4; }
+.record-grade[data-tone="gold"] { color: #ffd769; }
+
+.record-grade[data-tone="iridescent"] {
+  color: transparent;
+  background: linear-gradient(120deg, #76e8ff, #a5f3ba, #ffe977, #ff83bd, #76e8ff);
+  background-size: 240% 100%;
+  background-clip: text;
+  text-shadow: none;
+  animation: record-grade-spectrum 2.8s linear infinite;
+}
+
+@keyframes record-grade-spectrum {
+  to { background-position: -240% 0; }
 }
 
 .loading-state {

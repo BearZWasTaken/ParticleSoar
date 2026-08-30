@@ -1,6 +1,7 @@
 import { loadContentCatalog } from "./content-catalog.js?v=20260829-1";
 import { difficultyColor } from "./difficulty.js?v=20260828-4";
-import { LocalPlayerProgressStore } from "./player-progress.js?v=20260828-1";
+import { PlayerProfileStore } from "./player-profile.js?v=20260829-1";
+import { resultGrade } from "./result-core.js?v=20260829-2";
 
 const refs = {
   chapterTitle: document.getElementById("chapter-title"),
@@ -9,17 +10,17 @@ const refs = {
   stage: document.getElementById("constellation-stage"),
   lines: document.getElementById("constellation-lines"),
   nodes: document.getElementById("song-nodes"),
-  progressCount: document.getElementById("progress-count"),
   songInfo: document.getElementById("song-info"),
   songState: document.getElementById("song-state"),
   songTitle: document.getElementById("song-title"),
   songComposer: document.getElementById("song-composer"),
   songDifficulties: document.getElementById("song-difficulties"),
   loading: document.getElementById("loading-state"),
-  starfield: document.getElementById("starfield")
+  starfield: document.getElementById("starfield"),
+  settings: document.getElementById("open-settings")
 };
 
-const progressStore = new LocalPlayerProgressStore();
+const profileStore = new PlayerProfileStore();
 const params = new URLSearchParams(window.location.search);
 let catalog;
 let chapter;
@@ -62,7 +63,37 @@ function entryByTarget(target) {
 }
 
 function isUnlocked(songId) {
-  return progress.unlocked.includes(songId);
+  return progress.progression.unlocked.includes(songId);
+}
+
+function chartRecord(songId, chartFile) {
+  return progress.records[songId]?.charts?.[chartFile] ?? null;
+}
+
+function bestChartResult(songId, chartFile) {
+  const record = chartRecord(songId, chartFile);
+  const score = Math.max(0, Number(record?.bestScore) || 0);
+  return {
+    isNew: !record || (Number(record.playCount) || 0) === 0,
+    score,
+    grade: resultGrade(record?.bestResult ? { ...record.bestResult, score } : { score })
+  };
+}
+
+function applyGradeTone(element, grade) {
+  element.dataset.tone = grade.tone;
+  element.textContent = grade.label;
+}
+
+function applyChartRecord(container, gradeElement, scoreElement, best) {
+  container.classList.toggle("is-new", best.isNew);
+  gradeElement.hidden = best.isNew;
+  if (best.isNew) {
+    scoreElement.textContent = "-NEW-";
+    return;
+  }
+  applyGradeTone(gradeElement, best.grade);
+  scoreElement.textContent = String(best.score).padStart(7, "0");
 }
 
 function positionSongInfo(button) {
@@ -96,9 +127,16 @@ function showSongInfo(song, unlocked, button) {
   refs.songComposer.textContent = summary.composer ?? "Unknown Composer";
   refs.songDifficulties.replaceChildren(...(summary.charts ?? []).map((chart) => {
     const difficulty = document.createElement("span");
+    const best = bestChartResult(song.id, chart.file);
     difficulty.className = "song-difficulty";
     difficulty.style.setProperty("--difficulty-color", difficultyColor(chart.difficultyLabel));
-    difficulty.textContent = `${chart.difficultyLabel ?? "--"} ${chart.level ?? "--"}`;
+    const label = document.createElement("strong");
+    const grade = document.createElement("b");
+    const score = document.createElement("small");
+    label.textContent = `${chart.difficultyLabel ?? "--"} ${chart.level ?? "--"}`;
+    grade.className = "record-grade";
+    difficulty.append(label, grade, score);
+    applyChartRecord(difficulty, grade, score, best);
     return difficulty;
   }));
   refs.songInfo.hidden = false;
@@ -136,7 +174,7 @@ async function launchSong(song, chartSummary) {
   const chart = manifest.charts.find((entry) => entry.file === chartSummary.file);
   if (!chart) throw new Error(`Difficulty chart not found: ${chartSummary.file}`);
   const target = new URL("./index.html", window.location.href);
-  target.searchParams.set("v", "20260829-1");
+  target.searchParams.set("v", "20260829-11");
   target.searchParams.set("song", song.id);
   target.searchParams.set("chart", chart.file);
   target.searchParams.set("chapter", chapter.id);
@@ -171,7 +209,14 @@ function makeDifficultyPicker(song, charts, unlocked) {
     button.type = "button";
     button.className = "difficulty-choice";
     button.style.setProperty("--difficulty-color", difficultyColor(chart.difficultyLabel));
-    button.innerHTML = `<strong>${chart.difficultyLabel ?? "--"}</strong><span>${chart.level ?? "--"}</span>`;
+    const chartIdentity = document.createElement("span");
+    const chartLabel = document.createElement("strong");
+    const chartLevel = document.createElement("b");
+    chartIdentity.className = "difficulty-choice-identity";
+    chartLabel.textContent = chart.difficultyLabel ?? "--";
+    chartLevel.textContent = chart.level ?? "--";
+    chartIdentity.append(chartLabel, chartLevel);
+    button.append(chartIdentity);
     button.disabled = !unlocked;
     button.addEventListener("click", (event) => {
       event.stopPropagation();
@@ -184,7 +229,6 @@ function makeDifficultyPicker(song, charts, unlocked) {
 
 function renderSongNodes() {
   const songEntries = chapterEntries.filter((entry) => entry.node?.type === "song");
-  refs.progressCount.textContent = `${songEntries.filter((entry) => isUnlocked(entry.target)).length} / ${songEntries.length}`;
   refs.nodes.replaceChildren(...songEntries.map((entry) => {
     const song = entry.node;
     const summary = song.summary ?? {};
@@ -282,7 +326,7 @@ async function initialize() {
   if (!chapter || !["chapter", "map", "collection"].includes(chapter.type)) {
     throw new Error("Chapter entrypoint is missing");
   }
-  progress = await progressStore.initializeChapter(chapter);
+  progress = await profileStore.initializeChapter(chapter);
   chapterEntries = catalog.resolveEntries(chapter);
   refs.chapterTitle.textContent = chapter.title ?? "Untitled Chapter";
   refs.chapterSubtitle.textContent = chapter.subtitle ?? "CHAPTER";
@@ -294,6 +338,12 @@ async function initialize() {
 
 refs.constellation.addEventListener("click", (event) => {
   if ([refs.constellation, refs.stage, refs.nodes, refs.lines].includes(event.target)) clearFocus();
+});
+refs.settings.addEventListener("click", () => {
+  const target = new URL("./settings.html", window.location.href);
+  target.searchParams.set("v", "20260829-4");
+  target.searchParams.set("return", `${window.location.pathname}${window.location.search}`);
+  window.location.assign(target);
 });
 window.addEventListener("keydown", (event) => {
   if (event.key === "Escape") clearFocus();

@@ -5,8 +5,15 @@ import {
   RESULT_SESSION_KEY,
   paddedResultScore,
   parseResultSession,
-  resultCompletionLabel
-} from "./result-core.js?v=20260829-1";
+  resultGrade
+} from "./result-core.js?v=20260829-2";
+import { CONFIG } from "./config.js?v=20260829-1";
+import {
+  accuracyHistogram,
+  meanAbsoluteTimingError,
+  successfulTimingOffsets,
+  timingWindowsMilliseconds
+} from "./accuracy-core.js?v=20260829-1";
 
 const refs = {
   shell: document.getElementById("result-shell"),
@@ -19,14 +26,58 @@ const refs = {
   difficulty: document.getElementById("result-difficulty"),
   difficultyLabel: document.getElementById("result-difficulty-label"),
   difficultyLevel: document.getElementById("result-difficulty-level"),
-  completion: document.getElementById("completion-mark"),
+  grade: document.getElementById("result-grade"),
+  gradeLabel: document.getElementById("result-grade-label"),
   score: document.getElementById("result-score"),
   maxCombo: document.getElementById("result-max-combo"),
+  accuracyMean: document.getElementById("accuracy-mean"),
+  accuracyHistogram: document.getElementById("accuracy-histogram"),
   restart: document.getElementById("result-restart"),
   back: document.getElementById("result-back"),
   errorBack: document.getElementById("error-back"),
   starfield: document.getElementById("result-starfield")
 };
+
+function renderAccuracy(result) {
+  const offsets = successfulTimingOffsets(result.timingSamples);
+  const fallbackWindows = timingWindowsMilliseconds(
+    CONFIG.game.judgement.windows[CONFIG.game.judgement.mode]
+      ?? CONFIG.game.judgement.windows.ordinary
+  );
+  const windows = result.timingWindowsMs ?? fallbackWindows;
+  const bins = accuracyHistogram(offsets, windows);
+  const maximum = Math.max(1, ...bins);
+  const labels = ["-D", "-DP", "-P", "0", "+P", "+PD", "+D"];
+  const halfFlawless = windows.flawless / 2;
+  const primeDecentMiddle = (windows.prime + windows.decent) / 2;
+  const ranges = [
+    `[-${windows.decent}, -${primeDecentMiddle})ms`,
+    `[-${primeDecentMiddle}, -${windows.prime})ms`,
+    `[-${windows.prime}, -${halfFlawless})ms`,
+    `[-${halfFlawless}, ${halfFlawless}]ms`,
+    `(${halfFlawless}, ${windows.prime}]ms`,
+    `(${windows.prime}, ${primeDecentMiddle}]ms`,
+    `(${primeDecentMiddle}, ${windows.decent}]ms`
+  ];
+  refs.accuracyMean.textContent = `${meanAbsoluteTimingError(offsets).toFixed(2)}ms`;
+  refs.accuracyHistogram.replaceChildren(...bins.map((count, index) => {
+    const column = document.createElement("div");
+    const value = document.createElement("strong");
+    const bar = document.createElement("span");
+    const label = document.createElement("small");
+    const distance = Math.abs(index - 3) / 3;
+    const hue = 132 + (48 - 132) * distance;
+    column.className = `accuracy-column${index === 3 ? " center" : ""}`;
+    column.style.setProperty("--bar-height", `${Math.max(count > 0 ? 8 : 1, count / maximum * 100)}%`);
+    column.style.setProperty("--accuracy-bar-color", `hsl(${hue} 84% 65%)`);
+    column.setAttribute("aria-label", `${ranges[index]}: ${count}`);
+    column.title = ranges[index];
+    value.textContent = String(count);
+    label.textContent = labels[index];
+    column.append(value, bar, label);
+    return column;
+  }));
+}
 
 function resultSession() {
   return parseResultSession(sessionStorage.getItem(RESULT_SESSION_KEY));
@@ -34,7 +85,7 @@ function resultSession() {
 
 function chapterUrl(session) {
   const target = new URL("./select.html", window.location.href);
-  target.searchParams.set("v", "20260828-5");
+  target.searchParams.set("v", "20260829-10");
   if (session?.chapterId) target.searchParams.set("chapter", session.chapterId);
   return target;
 }
@@ -65,7 +116,7 @@ function setupStarfield() {
 
 function navigateToGame(session) {
   const target = new URL("./index.html", window.location.href);
-  target.searchParams.set("v", "20260829-1");
+  target.searchParams.set("v", "20260829-11");
   target.searchParams.set("song", session.songId);
   target.searchParams.set("chart", session.chart);
   if (session.chapterId) target.searchParams.set("chapter", session.chapterId);
@@ -102,12 +153,15 @@ async function initialize() {
   refs.illustrator.textContent = manifest.illustrator ?? "-";
   refs.difficultyLabel.textContent = `-${chart.difficultyLabel ?? "--"}-`;
   refs.difficultyLevel.textContent = chart.level ?? "--";
-  refs.completion.textContent = resultCompletionLabel(session.result);
+  const grade = resultGrade(session.result);
+  refs.grade.dataset.tone = grade.tone;
+  refs.gradeLabel.textContent = grade.label;
   refs.score.textContent = paddedResultScore(session.result.score);
   refs.maxCombo.textContent = Math.max(0, Number(session.result.maxCombo) || 0);
   RESULT_JUDGEMENTS.forEach((name) => {
     document.getElementById(`count-${name}`).textContent = Math.max(0, Number(session.result.counts?.[name]) || 0);
   });
+  renderAccuracy(session.result);
 
   refs.restart.addEventListener("click", () => navigateToGame(session));
   refs.back.addEventListener("click", () => window.location.assign(chapterUrl(session)));

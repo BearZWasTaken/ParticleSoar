@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ParticleSoar - Settings</title>
+  <link rel="stylesheet" href="./ui-components.css?v=20260829-1">
+  <link rel="stylesheet" href="./settings.css?v=20260829-3">
+</head>
+<body>
+  <canvas id="calibration-scene" aria-label="延迟校准预览"></canvas>
+
+  <header class="settings-header">
+    <button type="button" class="ps-icon-button" id="settings-back" aria-label="返回选歌" title="返回选歌">←</button>
+    <div>
+      <span>PLAYER CONFIGURATION</span>
+      <h1>Settings</h1>
+    </div>
+    <strong id="save-state">SAVED</strong>
+  </header>
+
+  <aside class="settings-panel" aria-label="游戏设置">
+    <section class="settings-section">
+      <h2>General</h2>
+      <div class="ps-slider" data-setting="chartDelayMs">
+        <div class="ps-slider__header"><label class="ps-slider__label" for="chart-delay">Chart Delay</label><output class="ps-slider__value"></output></div>
+        <input id="chart-delay" type="range" min="-200" max="200" step="1">
+      </div>
+      <div class="ps-slider" data-setting="inputDelayMs">
+        <div class="ps-slider__header"><label class="ps-slider__label" for="input-delay">Input Delay</label><output class="ps-slider__value"></output></div>
+        <input id="input-delay" type="range" min="-200" max="200" step="1">
+      </div>
+      <div class="calibration-control">
+        <button type="button" class="ps-button ps-button--success" id="calibration-replay">Replay calibration</button>
+      </div>
+      <div class="ps-slider" data-setting="musicVolume">
+        <div class="ps-slider__header"><label class="ps-slider__label" for="music-volume">Music Volume</label><output class="ps-slider__value"></output></div>
+        <input id="music-volume" type="range" min="0" max="1" step="0.01">
+      </div>
+      <div class="ps-slider" data-setting="hitSoundVolume">
+        <div class="ps-slider__header"><label class="ps-slider__label" for="hit-volume">Hit Sound Volume</label><output class="ps-slider__value"></output></div>
+        <input id="hit-volume" type="range" min="0" max="1" step="0.01">
+      </div>
+      <label class="ps-toggle">
+        <span>Pause When Unfocused</span>
+        <input id="auto-pause" type="checkbox">
+        <span class="ps-toggle__track" aria-hidden="true"></span>
+      </label>
+    </section>
+
+    <section class="settings-section experimental">
+      <h2>Experimental <small>(DO NOT alter randomly!! &gt;_&lt;)</small></h2>
+      <div class="ps-slider" data-setting="flowSpeedMultiplier">
+        <div class="ps-slider__header"><label class="ps-slider__label" for="flow-speed">Global Flow Speed</label><output class="ps-slider__value"></output></div>
+        <input id="flow-speed" type="range" min="0.5" max="2" step="0.05">
+      </div>
+    </section>
+
+    <div class="settings-actions">
+      <button type="button" class="ps-button ps-button--quiet" id="settings-reset">Reset defaults</button>
+    </div>
+  </aside>
+
+  <output class="calibration-result" id="calibration-result" aria-live="polite"></output>
+
+  <dialog class="ps-dialog" id="reset-confirm" aria-labelledby="reset-confirm-title">
+    <h2 id="reset-confirm-title">Reset all settings?</h2>
+    <div class="ps-dialog__actions">
+      <button type="button" class="ps-button ps-button--quiet" id="reset-cancel">Cancel</button>
+      <button type="button" class="ps-button ps-button--danger" id="reset-accept">Reset defaults</button>
+    </div>
+  </dialog>
+
+  <script type="module" src="./src/settings.js?v=20260829-4"></script>
+</body>
+</html>

@@ -1,0 +1,149 @@
+:root {
+  --ps-ui-text: #dde3e7;
+  --ps-ui-muted: #82909a;
+  --ps-ui-cyan: #70dcff;
+  --ps-ui-green: #9af2c5;
+  --ps-ui-yellow: #ffd66b;
+  --ps-ui-red: #ff6f87;
+  --ps-ui-surface: rgba(10, 16, 24, 0.78);
+  --ps-ui-line: rgba(112, 220, 255, 0.28);
+}
+
+.ps-button {
+  --ps-button-color: var(--ps-ui-cyan);
+  min-height: 40px;
+  padding: 0 16px;
+  border: 0;
+  border-left: 2px solid color-mix(in srgb, var(--ps-button-color) 64%, transparent);
+  border-radius: 0;
+  color: color-mix(in srgb, var(--ps-button-color) 78%, var(--ps-ui-text) 22%);
+  background: var(--ps-ui-surface);
+  font: 650 13px/1 Inter, "Segoe UI", sans-serif;
+  letter-spacing: 0;
+  cursor: pointer;
+  transition: color 120ms ease, border-color 120ms ease, background 120ms ease;
+}
+
+.ps-button:hover,
+.ps-button:focus-visible {
+  border-color: var(--ps-button-color);
+  outline: none;
+  color: color-mix(in srgb, var(--ps-button-color) 88%, white 12%);
+  background: color-mix(in srgb, var(--ps-button-color) 10%, rgba(10, 16, 24, 0.92));
+}
+
+.ps-button:disabled { opacity: 0.42; cursor: default; }
+.ps-button--success { --ps-button-color: var(--ps-ui-green); }
+.ps-button--warning { --ps-button-color: var(--ps-ui-yellow); }
+.ps-button--danger { --ps-button-color: var(--ps-ui-red); }
+.ps-button--quiet { --ps-button-color: var(--ps-ui-muted); }
+
+.ps-icon-button {
+  display: inline-grid;
+  width: 42px;
+  height: 42px;
+  padding: 0;
+  place-items: center;
+  border: 1px solid var(--ps-ui-line);
+  border-radius: 50%;
+  color: var(--ps-ui-text);
+  background: rgba(5, 9, 15, 0.68);
+  cursor: pointer;
+  transition: border-color 120ms ease, color 120ms ease, background 120ms ease;
+}
+
+.ps-icon-button:hover,
+.ps-icon-button:focus-visible {
+  outline: none;
+  border-color: var(--ps-ui-cyan);
+  color: var(--ps-ui-cyan);
+  background: rgba(10, 22, 31, 0.88);
+}
+
+.ps-slider {
+  display: grid;
+  gap: 9px;
+}
+
+.ps-slider__header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 18px;
+}
+
+.ps-slider__label { color: var(--ps-ui-text); font-size: 13px; font-weight: 600; }
+.ps-slider__value { color: var(--ps-ui-cyan); font: 650 13px/1.2 ui-monospace, SFMono-Regular, Consolas, monospace; }
+
+.ps-slider input[type="range"] {
+  width: 100%;
+  height: 20px;
+  margin: 0;
+  appearance: none;
+  background: transparent;
+  cursor: pointer;
+}
+
+.ps-slider input[type="range"]::-webkit-slider-runnable-track {
+  height: 2px;
+  background: linear-gradient(90deg, var(--ps-ui-cyan) var(--ps-range-progress, 50%), rgba(130, 144, 154, 0.28) var(--ps-range-progress, 50%));
+}
+
+.ps-slider input[type="range"]::-webkit-slider-thumb {
+  width: 12px;
+  height: 12px;
+  margin-top: -5px;
+  appearance: none;
+  border: 1px solid rgba(235, 246, 250, 0.9);
+  border-radius: 50%;
+  background: var(--ps-ui-cyan);
+  box-shadow: 0 0 10px rgba(112, 220, 255, 0.48);
+}
+
+.ps-toggle {
+  display: flex;
+  min-height: 34px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  color: var(--ps-ui-text);
+  font-size: 13px;
+}
+
+.ps-toggle input { position: absolute; opacity: 0; pointer-events: none; }
+.ps-toggle__track {
+  position: relative;
+  width: 38px;
+  height: 18px;
+  border: 1px solid rgba(130, 144, 154, 0.45);
+  border-radius: 10px;
+  background: rgba(5, 9, 15, 0.72);
+  transition: border-color 120ms ease, background 120ms ease;
+}
+.ps-toggle__track::after {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--ps-ui-muted);
+  content: "";
+  transition: transform 140ms ease, background 120ms ease, box-shadow 120ms ease;
+}
+.ps-toggle input:checked + .ps-toggle__track { border-color: rgba(112, 220, 255, 0.72); background: rgba(32, 91, 111, 0.3); }
+.ps-toggle input:checked + .ps-toggle__track::after { transform: translateX(20px); background: var(--ps-ui-cyan); box-shadow: 0 0 8px rgba(112, 220, 255, 0.5); }
+.ps-toggle input:focus-visible + .ps-toggle__track { outline: 1px solid var(--ps-ui-cyan); outline-offset: 3px; }
+
+.ps-dialog {
+  width: min(360px, calc(100vw - 36px));
+  padding: 25px;
+  border: 1px solid rgba(112, 220, 255, 0.42);
+  border-radius: 0;
+  color: var(--ps-ui-text);
+  background: rgba(5, 10, 17, 0.96);
+  box-shadow: 0 0 36px rgba(112, 220, 255, 0.12);
+}
+.ps-dialog::backdrop { background: rgba(0, 3, 7, 0.76); backdrop-filter: blur(4px); }
+.ps-dialog h2 { margin: 0 0 24px; font-size: 19px; font-weight: 620; }
+.ps-dialog__actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }

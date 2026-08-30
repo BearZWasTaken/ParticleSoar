@@ -1,0 +1,77 @@
+:root {
+  color-scheme: dark;
+  color: #dde3e7;
+  background: #03060b;
+  font-family: Inter, "Segoe UI", sans-serif;
+}
+
+* { box-sizing: border-box; }
+html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; background: #03060b; }
+body { position: relative; }
+
+#calibration-scene { position: fixed; inset: 0; width: 100%; height: 100%; }
+
+.settings-header {
+  position: fixed;
+  z-index: 4;
+  top: 0;
+  left: 0;
+  right: 0;
+  display: grid;
+  grid-template-columns: 44px 1fr auto;
+  align-items: center;
+  gap: 15px;
+  padding: 28px 34px;
+  pointer-events: none;
+}
+.settings-header > * { pointer-events: auto; }
+.settings-header span { color: #70dcff; font-size: 10px; font-weight: 750; }
+.settings-header h1 { margin: 3px 0 0; font-size: 27px; font-weight: 620; }
+.settings-header strong { color: #82909a; font: 650 11px ui-monospace, SFMono-Regular, Consolas, monospace; }
+.settings-header strong.is-saving { color: #ffd66b; }
+
+.settings-panel {
+  position: fixed;
+  z-index: 3;
+  top: 106px;
+  left: 34px;
+  bottom: 34px;
+  width: min(420px, calc(100vw - 68px));
+  overflow: auto;
+  border-left: 1px solid rgba(112, 220, 255, 0.48);
+  background: linear-gradient(90deg, rgba(5, 9, 15, 0.94), rgba(5, 9, 15, 0.74));
+  backdrop-filter: blur(13px);
+  scrollbar-width: thin;
+}
+
+.settings-section { padding: 23px 25px 27px; border-bottom: 1px solid rgba(112, 220, 255, 0.13); }
+.settings-section h2 { margin: 0 0 23px; font-size: 16px; font-weight: 650; }
+.settings-section h2 small { display: block; margin-top: 5px; color: #ff9aaa; font-size: 9px; font-weight: 700; }
+.settings-section .ps-slider + .ps-slider { margin-top: 21px; }
+.settings-section .ps-toggle { margin-top: 17px; }
+.experimental { border-left: 2px solid rgba(255, 111, 135, 0.48); }
+.experimental .ps-slider__value { color: #ff9aaa; }
+.experimental input[type="range"] { --ps-ui-cyan: #ff9aaa; }
+
+.calibration-control {
+  margin-top: 18px;
+}
+.calibration-control .ps-button { width: 100%; }
+.calibration-result {
+  position: fixed;
+  z-index: 2;
+  min-width: 120px;
+  min-height: 20px;
+  color: #e8f1f4;
+  font: 650 15px ui-monospace, SFMono-Regular, Consolas, monospace;
+  text-align: left;
+  text-shadow: 0 0 12px rgba(112, 220, 255, 0.42);
+  transform: translateY(-50%);
+  pointer-events: none;
+}
+.settings-actions { display: grid; padding: 22px 25px; }
+
+@media (max-width: 820px) {
+  .settings-header { padding: 16px; }
+  .settings-panel { top: 82px; left: 16px; bottom: 16px; width: min(390px, calc(100vw - 32px)); }
+}

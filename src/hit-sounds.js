@@ -43,6 +43,10 @@ export class HitSoundPlayer {
     if (context?.state === "suspended") await context.resume();
   }
 
+  setVolume(volume) {
+    this.volume = Math.min(1, Math.max(0, Number(volume) || 0));
+  }
+
   playJudgement(judgement) {
     const key = hitSoundKeyForJudgement(judgement);
     const context = this.ensureContext();

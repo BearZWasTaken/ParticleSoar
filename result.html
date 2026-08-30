@@ -4,17 +4,20 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>ParticleSoar - Result</title>
-  <link rel="stylesheet" href="./result.css?v=20260828-1">
+  <link rel="stylesheet" href="./ui-components.css?v=20260829-1">
+  <link rel="stylesheet" href="./result.css?v=20260829-4">
 </head>
 <body>
   <canvas id="result-starfield" aria-hidden="true"></canvas>
   <main class="result-shell" id="result-shell" hidden>
-    <section class="song-result" aria-labelledby="result-song-title">
+    <section class="song-result" aria-label="Song artwork">
       <div class="jacket-orbit">
         <img id="result-jacket" class="result-jacket" alt="">
       </div>
+    </section>
+
+    <section class="performance-result" aria-label="游玩结果">
       <div class="song-result-copy">
-        <span class="section-kicker">TRACK COMPLETE</span>
         <h1 id="result-song-title">Unknown Track</h1>
         <div class="difficulty-mark" id="result-difficulty">
           <span id="result-difficulty-label">--</span>
@@ -26,33 +29,49 @@
           <div><dt>ILLUSTRATOR</dt><dd id="result-illustrator">-</dd></div>
         </dl>
       </div>
-    </section>
 
-    <section class="performance-result" aria-label="游玩结果">
-      <div class="completion-mark" id="completion-mark">COMPLETE</div>
-      <div class="score-block">
-        <span>SCORE</span>
-        <strong id="result-score">0000000</strong>
-        <small>MAX COMBO <b id="result-max-combo">0</b></small>
+      <div class="performance-main">
+        <div class="score-column">
+          <div class="score-block">
+            <div class="score-value-row">
+              <div class="result-grade" id="result-grade" data-tone="white">
+                <strong id="result-grade-label">W</strong>
+              </div>
+              <strong id="result-score">0000000</strong>
+            </div>
+            <small>MAX COMBO <b id="result-max-combo">0</b></small>
+          </div>
+          <div class="judgement-list" id="judgement-list">
+            <div class="judgement-row flawless"><span>FLAWLESS</span><strong id="count-flawless">0</strong></div>
+            <div class="judgement-row prime"><span>PRIME</span><strong id="count-prime">0</strong></div>
+            <div class="judgement-row decent"><span>DECENT</span><strong id="count-decent">0</strong></div>
+            <div class="judgement-row loose"><span>LOOSE</span><strong id="count-loose">0</strong></div>
+            <div class="judgement-row hollow"><span>HOLLOW</span><strong id="count-hollow">0</strong></div>
+          </div>
+        </div>
+        <section class="accuracy-summary" aria-labelledby="accuracy-title">
+          <header>
+            <span id="accuracy-title">TIMING DISTRIBUTION</span>
+            <strong>MEAN ABS <b id="accuracy-mean">0.00ms</b></strong>
+          </header>
+          <div class="accuracy-histogram" id="accuracy-histogram" aria-label="Accuracy histogram"></div>
+          <div class="accuracy-histogram-axis" aria-hidden="true">
+            <span>EARLY</span><span>0ms</span><span>LATE</span>
+          </div>
+        </section>
       </div>
-      <div class="judgement-list" id="judgement-list">
-        <div class="judgement-row flawless"><span>FLAWLESS</span><strong id="count-flawless">0</strong></div>
-        <div class="judgement-row prime"><span>PRIME</span><strong id="count-prime">0</strong></div>
-        <div class="judgement-row decent"><span>DECENT</span><strong id="count-decent">0</strong></div>
-        <div class="judgement-row loose"><span>LOOSE</span><strong id="count-loose">0</strong></div>
-        <div class="judgement-row hollow"><span>HOLLOW</span><strong id="count-hollow">0</strong></div>
-      </div>
+
       <div class="result-actions">
-        <button type="button" id="result-restart">Restart</button>
-        <button type="button" id="result-back">Back to constellation</button>
+        <button type="button" class="ps-button ps-button--success" id="result-restart">Restart</button>
+        <button type="button" class="ps-button" id="result-back">Back to constellation</button>
       </div>
     </section>
   </main>
 
   <section class="result-error" id="result-error" hidden>
     <span>RESULT DATA UNAVAILABLE</span>
-    <button type="button" id="error-back">Back to constellation</button>
+    <button type="button" class="ps-button" id="error-back">Back to constellation</button>
   </section>
-  <script type="module" src="./src/result.js?v=20260829-1"></script>
+  <script type="module" src="./src/result.js?v=20260829-4"></script>
 </body>
 </html>

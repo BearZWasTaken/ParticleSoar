@@ -1,4 +1,4 @@
-import { CONFIG } from "./config.js?v=20260828-66";
+import { CONFIG } from "./config.js?v=20260829-1";
 
 const chartConfig = CONFIG.chart;
 const chartDefaults = chartConfig.defaults;
@@ -764,17 +764,18 @@ export function directionAt(chart, time) {
   };
 }
 
-export function buildReceiverTrajectory(chart, sampleSeconds = 0.04) {
+export function buildReceiverTrajectory(chart, sampleSeconds = 0.04, speedMultiplier = 1) {
   const duration = chart.timing.duration;
   const origin = chart.playfield.origin;
+  const multiplier = Math.max(0.001, Number(speedMultiplier) || 1);
   const samples = [];
   let position = [...origin];
   let previousTime = 0;
   for (let time = 0; time < duration + sampleSeconds * 0.5; time += sampleSeconds) {
     const clampedTime = Math.min(duration, time);
     const { direction, right, yaw, pitch } = directionAt(chart, clampedTime);
-    const forwardSpeed = Math.max(0, sampleTimeline(chart.timelines.moveSpeed, clampedTime, 0));
-    const strafeSpeed = sampleTimeline(chart.timelines.moveStrafeSpeed, clampedTime, 0);
+    const forwardSpeed = Math.max(0, sampleTimeline(chart.timelines.moveSpeed, clampedTime, 0)) * multiplier;
+    const strafeSpeed = sampleTimeline(chart.timelines.moveStrafeSpeed, clampedTime, 0) * multiplier;
     const speed = Math.hypot(forwardSpeed, strafeSpeed);
     const delta = clampedTime - previousTime;
     if (samples.length > 0) {
@@ -929,10 +930,10 @@ export function gridTimes(chart, start = 0, end = chart.timing.duration, tempoMa
   return times;
 }
 
-export function chartForGame(chart) {
+export function chartForGame(chart, { flowSpeedMultiplier = 1 } = {}) {
   const normalized = normalizeChart(chart);
   const sampleSeconds = chartConfig.trajectorySampleSeconds;
-  const trajectory = buildReceiverTrajectory(normalized, sampleSeconds);
+  const trajectory = buildReceiverTrajectory(normalized, sampleSeconds, flowSpeedMultiplier);
   const receiverEvents = [{
     hitTime: 0,
     moveSeconds: 0,

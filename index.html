@@ -1,3 +1,4 @@
+<link rel="stylesheet" href="./ui-components.css?v=20260829-1">
 <div id="app">
   <canvas id="scene" aria-label="ParticleSoar visual demo"></canvas>
   <div class="song-progress" aria-hidden="true">
@@ -29,6 +30,13 @@
     <span id="difficulty-name">-HS-</span>
     <strong id="difficulty-level">67</strong>
   </div>
+  <section class="accuracy-meter" id="accuracy-meter" aria-label="Timing accuracy">
+    <div class="accuracy-scale">
+      <div class="accuracy-axis"></div>
+      <div class="accuracy-ticks" id="accuracy-ticks"></div>
+      <div class="accuracy-hits" id="accuracy-hits"></div>
+    </div>
+  </section>
   <div class="camera-debug" aria-hidden="true">
     <div>pos <span id="camera-position">0, 0, 0</span></div>
     <div>target <span id="camera-target">0, 0, 0</span></div>
@@ -44,9 +52,9 @@
     <section class="pause-panel">
       <h2 id="pause-title">PAUSED</h2>
       <div class="pause-actions">
-        <button type="button" id="pause-continue">Continue</button>
-        <button type="button" id="pause-restart">Restart</button>
-        <button type="button" id="pause-exit">Exit</button>
+        <button type="button" class="ps-button ps-button--success" id="pause-continue">Continue</button>
+        <button type="button" class="ps-button ps-button--warning" id="pause-restart">Restart</button>
+        <button type="button" class="ps-button ps-button--danger" id="pause-exit">Exit</button>
       </div>
     </section>
   </div>
@@ -70,12 +78,19 @@ import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js"
 import { Line2 } from "three/addons/lines/Line2.js";
 import { LineGeometry } from "three/addons/lines/LineGeometry.js";
 import { LineMaterial } from "three/addons/lines/LineMaterial.js";
-import { CHART_FORMAT, chartForGame } from "./src/chart-core.js?v=20260828-70";
-import { CONFIG } from "./src/config.js?v=20260828-70";
+import { CHART_FORMAT, chartForGame } from "./src/chart-core.js?v=20260829-2";
+import { CONFIG } from "./src/config.js?v=20260829-1";
 import { loadContentCatalog } from "./src/content-catalog.js?v=20260829-1";
-import { LocalPlayerProgressStore } from "./src/player-progress.js?v=20260828-1";
+import {
+  DEFAULT_PLAYER_SETTINGS,
+  PlayerProfileStore
+} from "./src/player-profile.js?v=20260829-1";
 import { createInputMap } from "./src/input-map.js?v=20260829-1";
 import { HitSoundPlayer } from "./src/hit-sounds.js?v=20260829-2";
+import {
+  accuracyTickPositions,
+  timingWindowsMilliseconds
+} from "./src/accuracy-core.js?v=20260829-1";
 
 const gameConfig = CONFIG.game;
 const colorConfig = CONFIG.colors;
@@ -100,11 +115,12 @@ const pauseState = {
 };
 const gameplayAudio = new Audio();
 gameplayAudio.preload = "auto";
+let runtimeSettings = { ...DEFAULT_PLAYER_SETTINGS };
 const hitSoundPlayer = new HitSoundPlayer({
   urls: gameConfig.audio.hitSounds,
-  volume: gameConfig.audio.hitSoundVolume
+  volume: runtimeSettings.hitSoundVolume
 });
-const playerProgressStore = new LocalPlayerProgressStore();
+const playerProfileStore = new PlayerProfileStore();
 
 const canvas = document.getElementById("scene");
 const cameraModeReadout = document.getElementById("camera-mode");
@@ -133,6 +149,8 @@ const pauseOverlay = document.getElementById("pause-overlay");
 const pauseContinueButton = document.getElementById("pause-continue");
 const pauseRestartButton = document.getElementById("pause-restart");
 const pauseExitButton = document.getElementById("pause-exit");
+const accuracyTicks = document.getElementById("accuracy-ticks");
+const accuracyHits = document.getElementById("accuracy-hits");
 const renderer = new THREE.WebGLRenderer({
   canvas,
   antialias: true,
@@ -986,7 +1004,10 @@ function evaluateTimeline(timeline, chartTime) {
 }
 
 function currentFlowSpeed() {
-  return Math.max(0.001, evaluateTimeline(chartState.flowSpeedTimeline, chartState.chartTime));
+  return Math.max(
+    0.001,
+    evaluateTimeline(chartState.flowSpeedTimeline, chartState.chartTime) * runtimeSettings.flowSpeedMultiplier
+  );
 }
 
 function currentCameraOffset() {
@@ -1795,7 +1816,9 @@ function applyChartMetadata(chart) {
 }
 
 function loadChart(chart) {
-  if (chart?.format === CHART_FORMAT) chart = chartForGame(chart);
+  if (chart?.format === CHART_FORMAT) {
+    chart = chartForGame(chart, { flowSpeedMultiplier: runtimeSettings.flowSpeedMultiplier });
+  }
   chartState.startTime = clock?.getElapsedTime?.() ?? 0;
   chartState.chartTime = 0;
   cameraMount.configured = false;
@@ -1944,13 +1967,23 @@ function launchNoteOpacity(t) {
 async function recordSelectedSongClear() {
   if (!activeLaunch || activeLaunch.completed) return;
   activeLaunch.completed = true;
+  const timingSamples = gameplayState.judgementHistory.map((entry) => ({
+    hitTime: entry.note.hitTime,
+    type: baseNoteType(entry.note),
+    judgement: entry.judgement,
+    offsetMs: Number.isFinite(entry.offsetSeconds)
+      ? Math.round(entry.offsetSeconds * 100000) / 100
+      : null
+  }));
   const result = {
     score: roundScoreLikeCapSonik(gameplayState.score),
     maxCombo: gameplayState.maxCombo,
-    counts: structuredClone(gameplayState.counts)
+    counts: structuredClone(gameplayState.counts),
+    timingSamples,
+    timingWindowsMs: timingWindowsMilliseconds(currentJudgementWindows())
   };
-  await playerProgressStore.recordClear(activeLaunch.songId, activeLaunch.chart.file, result);
-  if (activeLaunch.chapter) await playerProgressStore.applyChapterUnlocks(activeLaunch.chapter);
+  await playerProfileStore.recordResult(activeLaunch.songId, activeLaunch.chart.file, result);
+  if (activeLaunch.chapter) await playerProfileStore.applyChapterUnlocks(activeLaunch.chapter);
   sessionStorage.setItem("particlesoar.last-result", JSON.stringify({
     songId: activeLaunch.songId,
     chart: activeLaunch.chart.file,
@@ -1959,7 +1992,7 @@ async function recordSelectedSongClear() {
   }));
   window.dispatchEvent(new CustomEvent("ParticleSoarChartComplete", { detail: result }));
   const target = new URL("./result.html", window.location.href);
-  target.searchParams.set("v", "20260829-1");
+  target.searchParams.set("v", "20260829-2");
   window.location.assign(target);
 }
 
@@ -1993,6 +2026,9 @@ async function loadSelectedSong() {
   const chapterId = launchParameters.get("chapter");
   const chapter = chapterId ? catalog.getNode(chapterId) : null;
   activeLaunch = { catalog, songId, chapter, chart: chartEntry, completed: false };
+  runtimeSettings = (await playerProfileStore.load()).settings;
+  gameplayAudio.volume = runtimeSettings.musicVolume;
+  hitSoundPlayer.setVolume(runtimeSettings.hitSoundVolume);
   await hitSoundPlayer.preload();
   launchIntro.phase = "ready";
   launchIntro.progress = 0;
@@ -2655,7 +2691,9 @@ function getLiveChartTime() {
     if (pauseState.paused) return pauseState.frozenChartTime;
     if (launchIntro.phase !== "playing") return 0;
     return THREE.MathUtils.clamp(
-      gameplayAudio.currentTime - (Number(timingConfig.audioOffset) || 0),
+      gameplayAudio.currentTime
+        - (Number(timingConfig.audioOffset) || 0)
+        + runtimeSettings.chartDelayMs / 1000,
       0,
       timingConfig.chartDuration
     );
@@ -2672,11 +2710,42 @@ function setEditorPreviewActive(active) {
 }
 
 function getJudgeChartTime() {
-  return normalizeChartTime(getLiveChartTime() + judgementConfig.inputOffsetSeconds);
+  return normalizeChartTime(
+    getLiveChartTime()
+      + judgementConfig.inputOffsetSeconds
+      + runtimeSettings.inputDelayMs / 1000
+  );
 }
 
 function currentJudgementWindows() {
   return judgementConfig.windows[judgementConfig.mode] ?? judgementConfig.windows.ordinary;
+}
+
+function setupAccuracyMeter() {
+  const windowsMs = timingWindowsMilliseconds(currentJudgementWindows());
+  accuracyTicks.replaceChildren(...accuracyTickPositions(windowsMs).map((tick) => {
+    const element = document.createElement("span");
+    element.className = "accuracy-tick";
+    element.style.left = `${tick.percent}%`;
+    element.dataset.label = tick.label;
+    return element;
+  }));
+}
+
+function showAccuracyHit(offsetSeconds) {
+  const windowsMs = timingWindowsMilliseconds(currentJudgementWindows());
+  const offsetMs = offsetSeconds * 1000;
+  if (!Number.isFinite(offsetMs) || Math.abs(offsetMs) > windowsMs.decent) return;
+  const clamped = THREE.MathUtils.clamp(offsetMs, -windowsMs.decent, windowsMs.decent);
+  const distance = Math.abs(clamped) / Math.max(windowsMs.decent, 0.001);
+  const hue = THREE.MathUtils.lerp(132, 48, distance);
+  const marker = document.createElement("span");
+  marker.className = "accuracy-hit";
+  marker.style.left = `${50 + clamped / (windowsMs.decent * 2) * 100}%`;
+  marker.style.setProperty("--accuracy-hit-color", `hsl(${hue} 88% 62%)`);
+  accuracyHits.appendChild(marker);
+  requestAnimationFrame(() => marker.classList.add("is-visible"));
+  window.setTimeout(() => marker.remove(), 2200);
 }
 
 function judgementForGap(timeGap) {
@@ -2827,8 +2896,16 @@ function finalizeNote(note, judgement, judgeChartTime) {
     note,
     judgement,
     judgedAt: judgeChartTime,
-    offsetSeconds: note.headOffsetSeconds ?? judgeChartTime - note.hitTime
+    offsetSeconds: Number.isFinite(note.headOffsetSeconds)
+      ? note.headOffsetSeconds
+      : captured
+        ? judgeChartTime - note.hitTime
+        : null
   });
+  if (note.hit && !note.accuracyDisplayed) {
+    showAccuracyHit(note.headOffsetSeconds ?? judgeChartTime - note.hitTime);
+    note.accuracyDisplayed = true;
+  }
 }
 
 function bindKeyToHold(note, code) {
@@ -2851,6 +2928,8 @@ function beginHold(note, judgement, judgeChartTime, code) {
   if (judgement !== "loose") {
     spawnHitEffect(note);
     hitSoundPlayer.playJudgement(judgement);
+    showAccuracyHit(note.headOffsetSeconds);
+    note.accuracyDisplayed = true;
   }
   showJudgementFeedback(judgement);
 }
@@ -2895,6 +2974,7 @@ function resetGameplayState() {
   comboCountReadout.textContent = "0";
   scoreCountReadout.textContent = "0".repeat(gameConfig.ui.scoreDigits);
   songProgressMarkers.replaceChildren();
+  accuracyHits.replaceChildren();
   resetHitEffects();
   notes.forEach((note) => {
     note.judged = false;
@@ -2904,6 +2984,7 @@ function resetGameplayState() {
     note.earlyLoose = false;
     note.capturedAtChartTime = null;
     note.headOffsetSeconds = null;
+    note.accuracyDisplayed = false;
     note.holdKeyCodes.clear();
     note.emptySinceChartTime = null;
     const head = noteVisualHead(note);
@@ -3082,10 +3163,13 @@ window.addEventListener("keyup", (event) => {
 window.addEventListener("blur", () => {
   if (pauseState.paused) return;
   releaseAllGameplayKeys(getJudgeChartTime());
+  if (runtimeSettings.autoPauseOnBlur) pauseGame();
 });
 
 document.addEventListener("visibilitychange", () => {
-  if (document.hidden && !pauseState.paused) releaseAllGameplayKeys(getJudgeChartTime());
+  if (!document.hidden || pauseState.paused) return;
+  releaseAllGameplayKeys(getJudgeChartTime());
+  if (runtimeSettings.autoPauseOnBlur) pauseGame();
 });
 
 pauseContinueButton.addEventListener("click", () => {
@@ -3353,7 +3437,7 @@ function updateHoldNoteVisual(note, segment, opacity, t, chartTime) {
     }
     const radial = particle.userData.radial * radius;
     const angle = particle.userData.angle + t * particle.userData.orbitSpeed;
-    const edgeFade = smoothstep(0.0, 0.08, u) * (1 - smoothstep(0.92, 1.0, u));
+    const edgeFade = 1 - smoothstep(0.92, 1.0, u);
     const localOpacity = opacity * particle.userData.baseOpacity * edgeFade;
     const position = holdRenderPosition;
     let axisA;
@@ -3683,6 +3767,7 @@ function animate() {
   requestAnimationFrame(animate);
 }
 
+setupAccuracyMeter();
 animate();
 </script>
 
@@ -3931,6 +4016,95 @@ body {
   letter-spacing: 0;
 }
 
+.accuracy-meter {
+  position: absolute;
+  z-index: 32;
+  right: 36px;
+  bottom: 26px;
+  width: min(390px, calc(100vw - 72px));
+  color: rgba(231, 239, 242, 0.72);
+  pointer-events: none;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+.accuracy-scale {
+  position: relative;
+  height: 34px;
+}
+
+.accuracy-axis {
+  position: absolute;
+  top: 16px;
+  left: 0;
+  width: 100%;
+  height: 1px;
+  background: rgba(220, 233, 239, 0.46);
+  box-shadow: 0 0 8px rgba(112, 220, 255, 0.16);
+}
+
+.accuracy-ticks,
+.accuracy-hits {
+  position: absolute;
+  inset: 0;
+}
+
+.accuracy-tick {
+  position: absolute;
+  top: 11px;
+  width: 1px;
+  height: 11px;
+  transform: translateX(-50%);
+  background: rgba(228, 238, 242, 0.58);
+}
+
+.accuracy-tick::before {
+  position: absolute;
+  bottom: 18px;
+  left: 50%;
+  color: rgba(222, 232, 236, 0.52);
+  font-size: 8px;
+  white-space: nowrap;
+  content: attr(data-label);
+  transform: translateX(-50%);
+}
+
+.accuracy-tick:nth-child(4) {
+  top: 8px;
+  width: 2px;
+  height: 17px;
+  background: rgba(239, 247, 249, 0.88);
+  box-shadow: 0 0 8px rgba(218, 241, 248, 0.42);
+}
+
+.accuracy-tick:nth-child(4)::before {
+  color: rgba(239, 247, 249, 0.84);
+  font-weight: 700;
+}
+
+.accuracy-hit {
+  position: absolute;
+  top: 9px;
+  width: 5px;
+  height: 16px;
+  opacity: 0;
+  transform: translateX(-50%) scaleY(0.3);
+  background: var(--accuracy-hit-color);
+  box-shadow: 0 0 12px var(--accuracy-hit-color);
+  transition: opacity 120ms ease-out, transform 120ms ease-out;
+}
+
+.accuracy-hit.is-visible {
+  opacity: 1;
+  transform: translateX(-50%) scaleY(1);
+  animation: accuracy-hit-fade 2.2s ease-out forwards;
+}
+
+@keyframes accuracy-hit-fade {
+  0%, 68% { opacity: 1; }
+  100% { opacity: 0; }
+}
+
 .camera-debug {
   display: none;
 }
@@ -3995,6 +4169,7 @@ body {
 .song-launch-loading .hud,
 .song-launch-loading .combo-display,
 .song-launch-loading .difficulty-display,
+.song-launch-loading .accuracy-meter,
 .song-launch-loading .camera-debug {
   visibility: hidden;
 }
@@ -4059,44 +4234,14 @@ body {
   gap: 8px;
 }
 
-.pause-actions button {
-  --pause-action-color: #9af2c5;
-  height: 39px;
-  border: 0;
-  border-left: 2px solid color-mix(in srgb, var(--pause-action-color) 62%, transparent);
-  border-radius: 0;
-  color: color-mix(in srgb, var(--pause-action-color) 78%, #dde3e7 22%);
-  background: rgba(13, 21, 30, 0.68);
-  font: inherit;
-  font-size: 13px;
-  font-weight: 650;
-  text-align: left;
-  padding: 0 15px;
-  cursor: pointer;
-  transition: color 120ms ease, border-color 120ms ease, background 120ms ease;
-}
-
-.pause-actions button:nth-child(2) {
-  --pause-action-color: #ffd66b;
-}
-
-.pause-actions button:nth-child(3) {
-  --pause-action-color: #ff6f87;
-}
-
-.pause-actions button:hover,
-.pause-actions button:focus-visible {
-  border-color: var(--pause-action-color);
-  outline: none;
-  color: color-mix(in srgb, var(--pause-action-color) 86%, white 14%);
-  background: color-mix(in srgb, var(--pause-action-color) 10%, rgba(13, 21, 30, 0.88));
-}
+.pause-actions .ps-button { text-align: left; }
 
 .editor-preview .song-progress,
 .editor-preview .hud,
 .editor-preview .debug-status,
 .editor-preview .combo-display,
 .editor-preview .difficulty-display,
+.editor-preview .accuracy-meter,
 .editor-preview .camera-debug,
 .editor-preview .launch-overlay,
 .editor-preview .pause-overlay {
@@ -4153,6 +4298,12 @@ body {
   .difficulty-display {
     left: 14px;
     bottom: 14px;
+  }
+
+  .accuracy-meter {
+    right: 14px;
+    bottom: 12px;
+    width: min(310px, 58vw);
   }
 
 }
