@@ -30,19 +30,22 @@ export function accuracyHistogram(offsetsMs = [], windowsMs = {}) {
   const prime = Math.max(flawless, finite(windowsMs.prime));
   const decent = Math.max(prime, finite(windowsMs.decent));
   const flawlessHalf = flawless / 2;
-  const outerMiddle = (prime + decent) / 2;
-  const bins = [0, 0, 0, 0, 0, 0, 0];
+  const flawlessPrimeMiddle = (flawless + prime) / 2;
+  const primeDecentMiddle = (prime + decent) / 2;
+  const thresholds = [flawless, flawlessPrimeMiddle, prime, primeDecentMiddle, decent];
+  const centerIndex = thresholds.length;
+  const bins = Array(thresholds.length * 2 + 1).fill(0);
 
   offsetsMs.forEach((rawOffset) => {
     const offset = finite(rawOffset, NaN);
     if (!Number.isFinite(offset) || Math.abs(offset) > decent) return;
     const magnitude = Math.abs(offset);
     if (magnitude <= flawlessHalf) {
-      bins[3] += 1;
+      bins[centerIndex] += 1;
       return;
     }
-    const distanceBand = magnitude <= prime ? 1 : magnitude <= outerMiddle ? 2 : 3;
-    bins[offset < 0 ? 3 - distanceBand : 3 + distanceBand] += 1;
+    const distanceBand = thresholds.findIndex((threshold) => magnitude <= threshold) + 1;
+    bins[offset < 0 ? centerIndex - distanceBand : centerIndex + distanceBand] += 1;
   });
 
   return bins;

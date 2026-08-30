@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>ParticleSoar - Result</title>
   <link rel="stylesheet" href="./ui-components.css?v=20260829-1">
-  <link rel="stylesheet" href="./result.css?v=20260829-4">
+  <link rel="stylesheet" href="./result.css?v=20260830-1">
 </head>
 <body>
   <canvas id="result-starfield" aria-hidden="true"></canvas>
@@ -55,8 +55,12 @@
             <strong>MEAN ABS <b id="accuracy-mean">0.00ms</b></strong>
           </header>
           <div class="accuracy-histogram" id="accuracy-histogram" aria-label="Accuracy histogram"></div>
-          <div class="accuracy-histogram-axis" aria-hidden="true">
-            <span>EARLY</span><span>0ms</span><span>LATE</span>
+          <div class="accuracy-histogram-groups" aria-hidden="true">
+            <span>DECENT</span>
+            <span>PRIME</span>
+            <span>FLAWLESS</span>
+            <span>PRIME</span>
+            <span>DECENT</span>
           </div>
         </section>
       </div>
@@ -72,6 +76,6 @@
     <span>RESULT DATA UNAVAILABLE</span>
     <button type="button" class="ps-button" id="error-back">Back to constellation</button>
   </section>
-  <script type="module" src="./src/result.js?v=20260829-4"></script>
+  <script type="module" src="./src/result.js?v=20260830-1"></script>
 </body>
 </html>

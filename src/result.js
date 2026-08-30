@@ -13,7 +13,7 @@ import {
   meanAbsoluteTimingError,
   successfulTimingOffsets,
   timingWindowsMilliseconds
-} from "./accuracy-core.js?v=20260829-1";
+} from "./accuracy-core.js?v=20260830-1";
 
 const refs = {
   shell: document.getElementById("result-shell"),
@@ -47,15 +47,19 @@ function renderAccuracy(result) {
   const windows = result.timingWindowsMs ?? fallbackWindows;
   const bins = accuracyHistogram(offsets, windows);
   const maximum = Math.max(1, ...bins);
-  const labels = ["-D", "-DP", "-P", "0", "+P", "+PD", "+D"];
   const halfFlawless = windows.flawless / 2;
+  const flawlessPrimeMiddle = (windows.flawless + windows.prime) / 2;
   const primeDecentMiddle = (windows.prime + windows.decent) / 2;
   const ranges = [
     `[-${windows.decent}, -${primeDecentMiddle})ms`,
     `[-${primeDecentMiddle}, -${windows.prime})ms`,
-    `[-${windows.prime}, -${halfFlawless})ms`,
+    `[-${windows.prime}, -${flawlessPrimeMiddle})ms`,
+    `[-${flawlessPrimeMiddle}, -${windows.flawless})ms`,
+    `[-${windows.flawless}, -${halfFlawless})ms`,
     `[-${halfFlawless}, ${halfFlawless}]ms`,
-    `(${halfFlawless}, ${windows.prime}]ms`,
+    `(${halfFlawless}, ${windows.flawless}]ms`,
+    `(${windows.flawless}, ${flawlessPrimeMiddle}]ms`,
+    `(${flawlessPrimeMiddle}, ${windows.prime}]ms`,
     `(${windows.prime}, ${primeDecentMiddle}]ms`,
     `(${primeDecentMiddle}, ${windows.decent}]ms`
   ];
@@ -64,17 +68,15 @@ function renderAccuracy(result) {
     const column = document.createElement("div");
     const value = document.createElement("strong");
     const bar = document.createElement("span");
-    const label = document.createElement("small");
-    const distance = Math.abs(index - 3) / 3;
+    const distance = Math.abs(index - 5) / 5;
     const hue = 132 + (48 - 132) * distance;
-    column.className = `accuracy-column${index === 3 ? " center" : ""}`;
+    column.className = `accuracy-column${index === 5 ? " center" : ""}`;
     column.style.setProperty("--bar-height", `${Math.max(count > 0 ? 8 : 1, count / maximum * 100)}%`);
     column.style.setProperty("--accuracy-bar-color", `hsl(${hue} 84% 65%)`);
     column.setAttribute("aria-label", `${ranges[index]}: ${count}`);
     column.title = ranges[index];
     value.textContent = String(count);
-    label.textContent = labels[index];
-    column.append(value, bar, label);
+    column.append(value, bar);
     return column;
   }));
 }
