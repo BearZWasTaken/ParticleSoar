@@ -87,8 +87,8 @@ import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js"
 import { Line2 } from "three/addons/lines/Line2.js";
 import { LineGeometry } from "three/addons/lines/LineGeometry.js";
 import { LineMaterial } from "three/addons/lines/LineMaterial.js";
-import { CHART_FORMAT, chartForGame } from "./src/chart-core.js?v=20260901-5";
-import { CONFIG } from "./src/config.js?v=20260901-2";
+import { CHART_FORMAT, chartForGame } from "./src/chart-core.js?v=20260901-7";
+import { CONFIG } from "./src/config.js?v=20260901-3";
 import { loadContentCatalog } from "./src/content-catalog.js?v=20260901-1";
 import {
   DEFAULT_PLAYER_SETTINGS,
@@ -103,6 +103,7 @@ import {
 
 const gameConfig = CONFIG.game;
 const colorConfig = CONFIG.colors;
+const CHART_TIME_STEP_SECONDS = CONFIG.chart.timeStepSeconds;
 
 const editorPreviewMode = new URLSearchParams(window.location.search).has("editorPreview");
 const launchParameters = new URLSearchParams(window.location.search);
@@ -839,6 +840,7 @@ const chartState = {
   chartTime: 0,
   motionMode: "notes-fall",
   flowSpeedTimeline: null,
+  lookAheadTimeline: null,
   cameraTimelines: {},
   receiverTrajectory: null,
   constellationEdges: [],
@@ -1742,6 +1744,10 @@ function applyChartSettings(chart) {
     chart.timelines?.FlowSpeed ?? chart.timelines?.flowSpeed ?? [],
     timingConfig.flowSpeed
   );
+  chartState.lookAheadTimeline = normalizeTimeline(
+    chart.timelines?.LookAhead ?? chart.timelines?.lookAhead ?? [],
+    timingConfig.staticNoteLeadSeconds
+  );
   chartState.cameraTimelines = {
     x: normalizeTimeline(chart.timelines?.CameraX ?? chart.timelines?.CamX ?? [], 0),
     y: normalizeTimeline(chart.timelines?.CameraY ?? chart.timelines?.CamY ?? [], 0),
@@ -2231,7 +2237,7 @@ function writeSideTrajectoryGeometry(rail, worldPoints, pointCount) {
 }
 
 function updateSideTrajectories(chartTime) {
-  const horizon = timingConfig.staticNoteLeadSeconds + 0.45;
+  const horizon = Math.max(0, evaluateTimeline(chartState.lookAheadTimeline, chartTime)) + 0.45;
   const remainingChartTime = Math.max(0.001, timingConfig.chartDuration - chartTime);
   const sampledHorizon = Math.min(horizon, remainingChartTime);
   sideTrajectorySampleCount = Math.max(
@@ -3209,6 +3215,10 @@ function noteVisibility(progress, timeToHit) {
   return fadeIn * postHitVisibility(timeToHit);
 }
 
+function noteAppearanceProgress(timeToHit, lookAhead) {
+  return 1 - timeToHit / Math.max(CHART_TIME_STEP_SECONDS, lookAhead);
+}
+
 function capturedNoteVisibility(note, chartTime) {
   if (note.capturedAtChartTime === null) return 1;
   let elapsed = chartTime - note.capturedAtChartTime;
@@ -3249,10 +3259,10 @@ function notePointAtHitTime(note, hitTime, chartTime, wrap = true) {
   return { position: new THREE.Vector3(x, y, z), progress: p, timeToHit };
 }
 
-function notePosition(note, chartTime) {
+function notePosition(note, chartTime, lookAhead) {
   if (chartState.motionMode === "receiver-catch") {
     const timeToHit = timeUntilHit(note.hitTime, chartTime);
-    const p = 1 - timeToHit / timingConfig.staticNoteLeadSeconds;
+    const p = noteAppearanceProgress(timeToHit, lookAhead);
     return { position: note.hitPosition.clone(), progress: p, timeToHit };
   }
   return notePointAtHitTime(note, note.hitTime, chartTime);
@@ -3266,7 +3276,7 @@ function buildHoldTrajectory(note) {
   });
 }
 
-function holdSegment(note, chartTime) {
+function holdSegment(note, chartTime, lookAhead) {
   if (chartState.motionMode === "receiver-catch") {
     const headTimeToHit = timeUntilHit(note.hitTime, chartTime, false);
     const tailTimeToHit = timeUntilHit(note.endTime, chartTime, false);
@@ -3277,15 +3287,15 @@ function holdSegment(note, chartTime) {
       head: {
         position: headTransform ? headTransform.position : note.hitPosition.clone(),
         quaternion: headTransform ? headTransform.quaternion : note.zone.noteQuaternion,
-        progress: 1 - headTimeToHit / timingConfig.staticNoteLeadSeconds,
+        progress: noteAppearanceProgress(headTimeToHit, lookAhead),
         timeToHit: headTimeToHit
       },
       tail: {
         position: tailTransform ? tailTransform.position : note.tailHitPosition.clone(),
-        progress: 1 - tailTimeToHit / timingConfig.staticNoteLeadSeconds,
+        progress: noteAppearanceProgress(tailTimeToHit, lookAhead),
         timeToHit: tailTimeToHit
       },
-      progress: 1 - headTimeToHit / timingConfig.staticNoteLeadSeconds,
+      progress: noteAppearanceProgress(headTimeToHit, lookAhead),
       timeToHit: headTimeToHit,
       trajectoryStartTime: activeHead ? chartTime : note.hitTime
     };
@@ -3483,11 +3493,12 @@ function updateHoldNoteVisual(note, segment, opacity, t, chartTime) {
 function updateNotes(t, chartTime) {
   const visibleNotes = [];
   const introOpacity = launchNoteOpacity(t);
+  const lookAhead = Math.max(0, evaluateTimeline(chartState.lookAheadTimeline, chartTime));
   notes.forEach((note) => {
     if (isHoldNote(note)) {
-      const segment = holdSegment(note, chartTime);
+      const segment = holdSegment(note, chartTime, lookAhead);
       const opacity = introOpacity * note.mesh.userData.baseOpacity
-        * holdVisibility(segment.head.progress, segment.tail.timeToHit)
+        * holdVisibility(noteAppearanceProgress(segment.head.timeToHit, lookAhead), segment.tail.timeToHit)
         * holdStateOpacity(note);
       updateHoldNoteVisual(note, segment, opacity, t, chartTime);
       if (opacity > 0.02) {
@@ -3504,13 +3515,14 @@ function updateNotes(t, chartTime) {
       return;
     }
 
-    const { position, progress, timeToHit } = notePosition(note, chartTime);
+    const { position, progress, timeToHit } = notePosition(note, chartTime, lookAhead);
     note.mesh.position.copy(position);
     if (!isPlayableNote(note)) note.mesh.quaternion.copy(note.zone.noteQuaternion);
     const isPlayable = isPlayableNote(note);
     const pulseScale = isPlayable ? Math.sin(t * 5 + note.pulse) * 0.035 : 0;
     const scale = note.mesh.userData.baseScale * (1 + pulseScale);
-    const visibility = noteVisibility(progress, timeToHit) * capturedNoteVisibility(note, chartTime);
+    const visibility = noteVisibility(noteAppearanceProgress(timeToHit, lookAhead), timeToHit)
+      * capturedNoteVisibility(note, chartTime);
     const hitFlash = isPlayable ? (note.mesh.userData.hitFlash ?? 0) : 0;
     const opacity = introOpacity * note.mesh.userData.baseOpacity * visibility * (1 + hitFlash * 0.45);
 

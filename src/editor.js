@@ -26,8 +26,8 @@ import {
   timeAtBeat,
   trajectoryPoseAt,
   receiverFrameAt
-} from "./chart-core.js?v=20260901-5";
-import { CONFIG } from "./config.js?v=20260901-2";
+} from "./chart-core.js?v=20260901-7";
+import { CONFIG } from "./config.js?v=20260901-3";
 import { HitSoundPlayer } from "./hit-sounds.js?v=20260831-1";
 import { createProjectZip, projectJson, readProjectZip } from "./project-package.js?v=20260828-66";
 
@@ -150,6 +150,7 @@ const state = {
   gamePreviewReady: false,
   editorPanelOpen: false,
   previewNoteCursor: 0,
+  previewNoteSchedule: [],
   previewNoteTime: null,
   continuousEdit: null,
   waveformPitch: null,
@@ -599,6 +600,7 @@ function createPreviewNoteMesh(note) {
   );
   mesh.position.fromArray(noteWorldPosition(note));
   mesh.userData.noteId = note.id;
+  mesh.userData.hitTime = note.hitTime;
   mesh.userData.visibleUntil = previewNoteEndTime(note);
   previewNotesRoot.add(mesh);
   previewNoteMeshes.set(note.id, mesh);
@@ -616,39 +618,47 @@ function removePreviewNoteMesh(noteId) {
 function resetPreviewNoteWindow() {
   disposeGroup(previewNotesRoot);
   previewNoteMeshes.clear();
+  state.previewNoteSchedule = [...state.chart.notes]
+    .sort((left, right) => left.hitTime - right.hitTime);
   state.previewNoteCursor = 0;
   state.previewNoteTime = null;
 }
 
 function syncPreviewNotesForTime(time, force = false) {
   if (!force && state.previewNoteTime === time) return;
-  const notes = state.chart.notes;
+  const lookAhead = Math.max(0, sampleTimeline(
+    state.chart.timelines.lookAhead,
+    time,
+    previewTiming.leadSeconds
+  ));
+  const visibleThrough = time + lookAhead;
   const jumped = state.previewNoteTime === null
     || time < state.previewNoteTime
     || Math.abs(time - state.previewNoteTime) > 0.5;
 
   if (jumped) {
     resetPreviewNoteWindow();
-    while (
-      state.previewNoteCursor < notes.length
-      && notes[state.previewNoteCursor].hitTime - previewTiming.leadSeconds <= time
-    ) {
-      const note = notes[state.previewNoteCursor];
-      if (previewNoteEndTime(note) >= time) createPreviewNoteMesh(note);
-      state.previewNoteCursor += 1;
-    }
-  } else {
-    while (
-      state.previewNoteCursor < notes.length
-      && notes[state.previewNoteCursor].hitTime - previewTiming.leadSeconds <= time
-    ) {
-      createPreviewNoteMesh(notes[state.previewNoteCursor]);
-      state.previewNoteCursor += 1;
-    }
-    [...previewNoteMeshes.entries()].forEach(([noteId, mesh]) => {
-      if (mesh.userData.visibleUntil < time) removePreviewNoteMesh(noteId);
-    });
   }
+
+  while (
+    state.previewNoteCursor > 0
+    && state.previewNoteSchedule[state.previewNoteCursor - 1].hitTime > visibleThrough
+  ) {
+    state.previewNoteCursor -= 1;
+  }
+  while (
+    state.previewNoteCursor < state.previewNoteSchedule.length
+    && state.previewNoteSchedule[state.previewNoteCursor].hitTime <= visibleThrough
+  ) {
+    const note = state.previewNoteSchedule[state.previewNoteCursor];
+    if (previewNoteEndTime(note) >= time && !previewNoteMeshes.has(note.id)) createPreviewNoteMesh(note);
+    state.previewNoteCursor += 1;
+  }
+  [...previewNoteMeshes.entries()].forEach(([noteId, mesh]) => {
+    if (mesh.userData.visibleUntil < time || mesh.userData.hitTime > visibleThrough) {
+      removePreviewNoteMesh(noteId);
+    }
+  });
   state.previewNoteTime = time;
 }
 
@@ -1509,16 +1519,25 @@ function handlePointerMove(event) {
     });
     renderNoteEditor();
   } else if (state.drag.kind === "event") {
-    const deltaTime = -(event.clientY - state.drag.startY) / state.pixelsPerSecond;
+    const deltaY = event.clientY - state.drag.startY;
+    const deltaTime = -deltaY / state.pixelsPerSecond;
     const deltaX = event.clientX - state.drag.startX;
-    state.drag.changed ||= Math.hypot(deltaX, event.clientY - state.drag.startY) >= 1;
+    if (!state.drag.axis && Math.hypot(deltaX, deltaY) >= 3) {
+      state.drag.axis = Math.abs(deltaY) >= Math.abs(deltaX) ? "time" : "value";
+    }
+    state.drag.changed ||= Boolean(state.drag.axis);
     state.drag.snapshots.forEach((snapshot) => {
       const timelineEvent = state.chart.timelines[snapshot.timelineId].find((item) => item.id === snapshot.id);
       if (!timelineEvent) return;
       const metric = state.drag.metrics[snapshot.timelineId];
       const valueSpan = metric.range.max - metric.range.min;
-      timelineEvent.time = snapTime(state.chart, snapshot.time + deltaTime);
-      timelineEvent.value = snapshot.value + (deltaX / (metric.width * 0.76)) * valueSpan;
+      if (state.drag.axis === "time") {
+        timelineEvent.time = snapTime(state.chart, snapshot.time + deltaTime);
+        timelineEvent.value = snapshot.value;
+      } else if (state.drag.axis === "value") {
+        timelineEvent.time = snapshot.time;
+        timelineEvent.value = snapshot.value + (deltaX / (metric.width * 0.76)) * valueSpan;
+      }
     });
     renderEventTimelines();
   }

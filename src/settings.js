@@ -1,4 +1,4 @@
-import { CONFIG } from "./config.js?v=20260901-2";
+import { CONFIG } from "./config.js?v=20260901-3";
 import { HitSoundPlayer } from "./hit-sounds.js?v=20260829-2";
 import { createInputMap } from "./input-map.js?v=20260829-1";
 import {

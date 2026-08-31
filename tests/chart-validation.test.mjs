@@ -1,12 +1,15 @@
 import assert from "node:assert/strict";
 import {
   createDefaultChart,
+  chartForGame,
   findDuplicateNotePlacement,
   findDuplicateTimelineEvent,
   normalizeChart
 } from "../src/chart-core.js";
 
 const chart = createDefaultChart();
+assert.equal(chart.timelines.lookAhead[0].value, 2.15);
+assert.equal(chartForGame(chart).timelines.LookAhead[0].from, 2.15);
 chart.notes = [
   { type: "m", hitTime: 1, wPos: 0.25 },
   { type: "middle", hitTime: 1, wPos: 0.25 },

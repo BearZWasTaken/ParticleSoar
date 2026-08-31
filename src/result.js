@@ -7,7 +7,7 @@ import {
   parseResultSession,
   resultGrade
 } from "./result-core.js?v=20260829-2";
-import { CONFIG } from "./config.js?v=20260901-2";
+import { CONFIG } from "./config.js?v=20260901-3";
 import {
   accuracyHistogram,
   meanAbsoluteTimingError,

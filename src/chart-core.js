@@ -1,4 +1,4 @@
-import { CONFIG } from "./config.js?v=20260901-2";
+import { CONFIG } from "./config.js?v=20260901-3";
 
 const chartConfig = CONFIG.chart;
 const chartDefaults = chartConfig.defaults;
@@ -1093,6 +1093,7 @@ export function chartForGame(chart, { flowSpeedMultiplier = 1 } = {}) {
     timelines: {
       ...structuredClone(normalized.timelines),
       FlowSpeed: [],
+      LookAhead: bakeTimeline(normalized.timelines.lookAhead, timelineDefault.lookAhead),
       CameraX: bakeTimeline(normalized.timelines.cameraX, timelineDefault.cameraX),
       CameraY: bakeTimeline(normalized.timelines.cameraY, timelineDefault.cameraY),
       CameraZ: bakeTimeline(normalized.timelines.cameraZ, timelineDefault.cameraZ, timelineDefault.cameraZ),
