@@ -12,6 +12,7 @@ export class HitSoundPlayer {
     this.context = null;
     this.buffers = new Map();
     this.preloadPromise = null;
+    this.activeSources = new Set();
   }
 
   ensureContext() {
@@ -47,7 +48,7 @@ export class HitSoundPlayer {
     this.volume = Math.min(1, Math.max(0, Number(volume) || 0));
   }
 
-  playJudgement(judgement) {
+  playJudgement(judgement, when = 0) {
     const key = hitSoundKeyForJudgement(judgement);
     const context = this.ensureContext();
     const buffer = key ? this.buffers.get(key) : null;
@@ -58,7 +59,16 @@ export class HitSoundPlayer {
     source.buffer = buffer;
     gain.gain.value = this.volume;
     source.connect(gain).connect(context.destination);
-    source.start();
+    this.activeSources.add(source);
+    source.onended = () => this.activeSources.delete(source);
+    source.start(Math.max(context.currentTime, Number(when) || 0));
     return true;
+  }
+
+  stopAll() {
+    this.activeSources.forEach((source) => {
+      try { source.stop(); } catch {}
+    });
+    this.activeSources.clear();
   }
 }

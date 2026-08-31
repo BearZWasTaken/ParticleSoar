@@ -198,12 +198,7 @@ export function normalizeChart(source = {}) {
         };
       })
       .filter((anchor) => Number.isFinite(anchor.beat) && Number.isFinite(anchor.time))
-      .filter((anchor) => anchor.beat > 0 && anchor.beat < beats && anchor.time > key.time && anchor.time < next.time)
-      .sort((left, right) => left.beat - right.beat || left.time - right.time)
-      .filter((anchor, anchorIndex, all) => (
-        anchorIndex === 0
-        || (anchor.beat > all[anchorIndex - 1].beat && anchor.time > all[anchorIndex - 1].time)
-      ));
+      .sort((left, right) => left.beat - right.beat || left.time - right.time);
     key.ramp = { beats, anchors };
   });
   chart.playfield = { ...defaults.playfield, ...(chart.playfield ?? {}) };
@@ -371,6 +366,17 @@ function makeConstantTempoSegment(start, end, rate, keyIndex) {
 }
 
 function solveRamp(points, startRate, endRate) {
+  const strictlyOrdered = points.every((point, index) => (
+    index === 0
+    || (point.time > points[index - 1].time && point.beat > points[index - 1].beat)
+  ));
+  if (!strictlyOrdered) {
+    return {
+      valid: false,
+      averages: [],
+      reason: "关键节拍必须依次位于变速段的时间与拍数范围内"
+    };
+  }
   const averages = points.slice(0, -1).map((point, index) => (
     (points[index + 1].beat - point.beat) / Math.max(0.000001, points[index + 1].time - point.time)
   ));
@@ -601,6 +607,29 @@ export function timeAtBeat(chart, beat, tempoMap = buildTempoMap(chart)) {
     else high = middle;
   }
   return segment.startTime + (segment.endTime - segment.startTime) * (low + high) * 0.5;
+}
+
+export function nearestRampAnchorAtTime(chart, keyIndex, time, kind = "beat", tempoMap = buildTempoMap(chart)) {
+  const key = chart.timing.bpmKeys[keyIndex];
+  const next = chart.timing.bpmKeys[keyIndex + 1];
+  if (!key?.ramp || !next || time <= key.time || time >= next.time) return null;
+
+  const totalBeats = key.ramp.beats;
+  const step = kind === "bar" ? key.beatsPerBar : 1;
+  const maxPosition = Math.floor((totalBeats - tempoEpsilon) / step);
+  if (maxPosition < 1) return null;
+
+  const issue = tempoMap.issues.find((candidate) => candidate.keyIndex === keyIndex);
+  const relativeBeat = issue
+    ? (time - key.time) / Math.max(tempoEpsilon, next.time - key.time) * totalBeats
+    : beatAt(chart, time, tempoMap) - (tempoMap.keyBeats[keyIndex] ?? 0);
+  const position = Math.max(1, Math.min(maxPosition, Math.round(relativeBeat / step)));
+  return {
+    kind: kind === "bar" ? "bar" : "beat",
+    position,
+    beat: position * step,
+    time
+  };
 }
 
 export function snapTime(chart, time, tempoMap = buildTempoMap(chart)) {

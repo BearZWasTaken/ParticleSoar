@@ -263,6 +263,10 @@ export const CONFIG = deepFreeze({
   editor: {
     initialPixelsPerSecond: 72,
     trajectorySampleSeconds: 0.035,
+    audio: {
+      hitSoundVolume: 0.7,
+      hitSoundLookaheadSeconds: 0.08
+    },
     zoom: { min: 36, max: 480, step: 1 },
     noteLayout: {
       left: 0.07,

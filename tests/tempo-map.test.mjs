@@ -6,6 +6,7 @@ import {
   compactChart,
   createDefaultChart,
   gridTimes,
+  nearestRampAnchorAtTime,
   normalizeChart,
   snapTime,
   timeAtBeat
@@ -67,6 +68,27 @@ assert.deepEqual(
   restored.timing.bpmKeys[0].ramp.anchors.map(({ kind, position, beat, time }) => [kind, position, beat, time]),
   [["bar", 1, 4, 2], ["beat", 11, 11, 5]]
 );
+
+assert.deepEqual(
+  nearestRampAnchorAtTime(chart, 0, 2, "beat", map),
+  { kind: "beat", position: 4, beat: 4, time: 2 }
+);
+assert.deepEqual(
+  nearestRampAnchorAtTime(chart, 0, 5, "bar", map),
+  { kind: "bar", position: 3, beat: 12, time: 5 }
+);
+
+const editedEndpoints = structuredClone(chart);
+editedEndpoints.timing.bpmKeys[0].bpm = 90;
+editedEndpoints.timing.bpmKeys[1].time = 1;
+const preservedChart = normalizeChart(editedEndpoints);
+const preservedRamp = preservedChart.timing.bpmKeys[0].ramp;
+assert.equal(preservedRamp.beats, 20);
+assert.deepEqual(
+  preservedRamp.anchors.map(({ kind, position, beat, time }) => [kind, position, beat, time]),
+  [["bar", 1, 4, 2], ["beat", 11, 11, 5]]
+);
+assert.equal(buildTempoMap(preservedChart).issues.length, 1);
 
 const hardChangeChart = normalizeChart({
   ...createDefaultChart(),

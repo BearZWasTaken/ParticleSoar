@@ -17,6 +17,7 @@ import {
   findDuplicateTimelineEvent,
   gridTimes,
   normalizeChart,
+  nearestRampAnchorAtTime,
   sampleTimeline,
   snapTime,
   snapWPos,
@@ -24,8 +25,9 @@ import {
   timeAtBeat,
   trajectoryPoseAt,
   receiverFrameAt
-} from "./chart-core.js?v=20260829-2";
-import { CONFIG } from "./config.js?v=20260829-1";
+} from "./chart-core.js?v=20260831-3";
+import { CONFIG } from "./config.js?v=20260831-2";
+import { HitSoundPlayer } from "./hit-sounds.js?v=20260831-1";
 import { createProjectZip, projectJson, readProjectZip } from "./project-package.js?v=20260828-66";
 
 const editorConfig = CONFIG.editor;
@@ -44,6 +46,7 @@ const refs = {
   durationTime: $("#duration-time"),
   playToggle: $("#play-toggle"),
   stop: $("#stop-button"),
+  hitSoundVolume: $("#hit-sound-volume"),
   viewMode: $("#view-mode"),
   dirtyState: $("#dirty-state"),
   projectLocation: $("#project-location"),
@@ -132,6 +135,8 @@ const state = {
   waveformPeaks: null,
   audioUrl: null,
   playing: false,
+  hitSoundCursor: 0,
+  hitSoundScheduledThrough: 0,
   playStartedAt: 0,
   playStartedChartTime: 0,
   viewMode: "global",
@@ -157,6 +162,14 @@ const state = {
   jacketUrl: null
 };
 state.tempoMap = buildTempoMap(state.chart);
+
+const hitSounds = new HitSoundPlayer({
+  urls: CONFIG.game.audio.hitSounds,
+  volume: editorConfig.audio.hitSoundVolume
+});
+let editorAudioSource = null;
+let hitSoundReadyPromise = null;
+refs.hitSoundVolume.value = editorConfig.audio.hitSoundVolume;
 
 function refreshTempoMap() {
   state.tempoMap = buildTempoMap(state.chart);
@@ -1893,9 +1906,90 @@ function rebuildEverything() {
   renderEffects();
   updateTimeUi(false);
   syncGamePreviewChart();
+  resetHitSoundSchedule(state.currentTime);
 }
 
 // Time and audio
+const HIT_SOUND_LOOKAHEAD_SECONDS = editorConfig.audio.hitSoundLookaheadSeconds;
+const HIT_SOUND_TIME_EPSILON = 0.0005;
+
+function firstNoteAtOrAfter(time) {
+  const notes = state.chart.notes;
+  let low = 0;
+  let high = notes.length;
+  while (low < high) {
+    const middle = (low + high) >> 1;
+    if (notes[middle].hitTime < time) low = middle + 1;
+    else high = middle;
+  }
+  return low;
+}
+
+function resetHitSoundSchedule(time = state.currentTime, includeCurrent = false) {
+  hitSounds.stopAll();
+  const threshold = time + (includeCurrent ? -HIT_SOUND_TIME_EPSILON : HIT_SOUND_TIME_EPSILON);
+  state.hitSoundCursor = firstNoteAtOrAfter(threshold);
+  state.hitSoundScheduledThrough = time;
+}
+
+function scheduleHitSounds(time) {
+  if (hitSounds.volume <= 0 || !state.playing) return;
+
+  const jumpedForward = time > state.hitSoundScheduledThrough + 0.05;
+  const jumpedBackward = time < state.hitSoundScheduledThrough - HIT_SOUND_LOOKAHEAD_SECONDS - 0.05;
+  if (jumpedForward || jumpedBackward) resetHitSoundSchedule(time);
+
+  const horizon = Math.min(state.chart.timing.duration, time + HIT_SOUND_LOOKAHEAD_SECONDS);
+  const notes = state.chart.notes;
+  const context = hitSounds.ensureContext();
+  if (!context) return;
+
+  while (state.hitSoundCursor < notes.length) {
+    const hitTime = notes[state.hitSoundCursor].hitTime;
+    if (hitTime > horizon + HIT_SOUND_TIME_EPSILON) break;
+
+    // A chord is one timing cue. Skip every other note at the same hitTime.
+    hitSounds.playJudgement("prime", context.currentTime + Math.max(0, hitTime - time));
+    state.hitSoundCursor += 1;
+    while (
+      state.hitSoundCursor < notes.length
+      && Math.abs(notes[state.hitSoundCursor].hitTime - hitTime) <= HIT_SOUND_TIME_EPSILON
+    ) state.hitSoundCursor += 1;
+  }
+  state.hitSoundScheduledThrough = horizon;
+}
+
+function ensureEditorAudioRouting() {
+  const context = hitSounds.ensureContext();
+  if (!context || editorAudioSource) return context;
+  editorAudioSource = context.createMediaElementSource(refs.audio);
+  editorAudioSource.connect(context.destination);
+  return context;
+}
+
+function ensureHitSoundsReady() {
+  if (hitSoundReadyPromise) return hitSoundReadyPromise;
+  ensureEditorAudioRouting();
+  hitSoundReadyPromise = Promise.all([hitSounds.unlock(), hitSounds.preload()]).catch((error) => {
+    hitSoundReadyPromise = null;
+    console.warn("Could not initialize editor hit sounds.", error);
+  });
+  return hitSoundReadyPromise;
+}
+
+function updateHitSoundVolume() {
+  const wasSilent = hitSounds.volume <= 0;
+  const volume = Number(refs.hitSoundVolume.value);
+  hitSounds.setVolume(volume);
+  if (volume <= 0) {
+    resetHitSoundSchedule();
+    return;
+  }
+  ensureHitSoundsReady().then(() => {
+    if (wasSilent) resetHitSoundSchedule(state.currentTime, state.playing);
+  });
+}
+
 function setCurrentTime(time, scrollIntoView = false) {
   state.currentTime = Math.max(0, Math.min(state.chart.timing.duration, Number(time) || 0));
   if (Math.abs(refs.audio.currentTime - state.currentTime) > 0.08 && !refs.audio.paused) refs.audio.currentTime = state.currentTime;
@@ -1925,22 +2019,32 @@ async function togglePlayback() {
   if (state.playing) {
     state.playing = false;
     refs.audio.pause();
+    resetHitSoundSchedule();
     refs.playToggle.textContent = "▶";
     return;
   }
+  if (hitSounds.volume > 0) await ensureHitSoundsReady();
   state.playing = true;
   state.playStartedAt = performance.now() / 1000;
   state.playStartedChartTime = state.currentTime;
+  resetHitSoundSchedule(state.currentTime, true);
   refs.playToggle.textContent = "❚❚";
   if (refs.audio.src) {
     refs.audio.currentTime = state.currentTime;
-    try { await refs.audio.play(); } catch { state.playing = false; }
+    try {
+      await refs.audio.play();
+    } catch {
+      state.playing = false;
+      refs.playToggle.textContent = "▶";
+      resetHitSoundSchedule();
+    }
   }
 }
 
 function stopPlayback() {
   state.playing = false;
   refs.audio.pause();
+  resetHitSoundSchedule(0);
   refs.audio.currentTime = 0;
   refs.playToggle.textContent = "▶";
   setCurrentTime(0, true);
@@ -2825,7 +2929,13 @@ refs.bpmKeyTime.addEventListener("input", (event) => {
   const key = state.chart.timing.bpmKeys.find((candidate) => candidate.id === state.selectedBpmKey);
   if (value === null || !key) return;
   applyContinuousChange(event.target, `bpm:${key.id}:time`, () => {
-    key.time = Math.max(0, Math.min(state.chart.timing.duration, value));
+    const keys = state.chart.timing.bpmKeys;
+    const index = keys.indexOf(key);
+    const minimum = index > 0 ? keys[index - 1].time + 0.001 : 0;
+    const maximum = index < keys.length - 1
+      ? keys[index + 1].time - 0.001
+      : state.chart.timing.duration;
+    key.time = Math.max(minimum, Math.min(maximum, value));
   }, "BPM Key 时间已更新", { bpm: true });
 });
 
@@ -2881,41 +2991,37 @@ refs.bpmRampBeats.addEventListener("input", (event) => {
   }, "变速段总拍数已更新");
 });
 
-function editedRampBeats(range) {
-  const inputValue = inputNumber(refs.bpmRampBeats);
-  return inputValue === null
-    ? range.key.ramp.beats
-    : Math.max(1, Math.round(inputValue));
-}
-
 function addRampAnchor(kind) {
-  let range = selectedBpmRange();
+  const range = selectedBpmRange();
   if (!range?.next || !range.key.ramp) return;
-  const totalBeats = editedRampBeats(range);
   if (state.currentTime <= range.key.time + 0.0005 || state.currentTime >= range.next.time - 0.0005) {
     setStatus("请将播放位置放在所选 BpmKey 与下一个 BpmKey 之间");
     return;
   }
-  const anchors = [...range.key.ramp.anchors].sort((left, right) => left.time - right.time);
-  const previous = anchors.filter((anchor) => anchor.time < state.currentTime).at(-1);
-  const following = anchors.find((anchor) => anchor.time > state.currentTime);
-  const previousBeat = previous?.beat ?? 0;
-  const candidateBeat = kind === "bar"
-    ? (Math.floor(previousBeat / range.key.beatsPerBar + 1e-7) + 1) * range.key.beatsPerBar
-    : Math.floor(previousBeat + 1e-7) + 1;
-  if (candidateBeat >= totalBeats || (following && candidateBeat >= following.beat - 1e-7)) {
-    setStatus("该位置后没有可用的节拍编号；请调整总拍数或相邻锚点");
+  const detected = nearestRampAnchorAtTime(
+    state.chart,
+    range.index,
+    state.currentTime,
+    kind,
+    state.tempoMap
+  );
+  if (!detected) {
+    setStatus(kind === "bar" ? "该变速段内没有可用的小节位置" : "该变速段内没有可用的节拍位置");
     return;
   }
-  const position = kind === "bar" ? candidateBeat / range.key.beatsPerBar : candidateBeat;
-  const anchor = { id: crypto.randomUUID(), kind, position, beat: candidateBeat, time: state.currentTime };
+  if (range.key.ramp.anchors.some((anchor) => anchor.beat === detected.beat)) {
+    setStatus(`第 ${detected.beat} 拍已经有关键拍`);
+    return;
+  }
+  const anchor = { id: crypto.randomUUID(), ...detected };
   const keyId = range.key.id;
   commitChange(() => {
     const key = state.chart.timing.bpmKeys.find((candidate) => candidate.id === keyId);
     if (!key?.ramp) return;
-    key.ramp.beats = totalBeats;
     key.ramp.anchors.push(anchor);
-  }, kind === "bar" ? "已记录小节线" : "已记录节拍");
+  }, kind === "bar"
+    ? `已识别并记录第 ${anchor.position} 小节`
+    : `已识别并记录第 ${anchor.beat} 拍`);
 }
 
 $("#add-ramp-beat").addEventListener("click", () => addRampAnchor("beat"));
@@ -2958,8 +3064,6 @@ refs.bpmRampAnchorList.addEventListener("click", (event) => {
 function repairRampEndpoint(endpoint) {
   const range = selectedBpmRange();
   if (!range?.next || !range.key.ramp) return;
-  const anchors = range.key.ramp.anchors;
-  if (anchors.length && !window.confirm("移动端点后，现有关键节拍将不再对应原时间。是否清除这些关键节拍并继续？")) return;
   const totalBeats = Math.max(1, Math.round(range.key.ramp.beats));
   const averageBpm = (range.key.bpm + range.next.bpm) * 0.5;
   const duration = totalBeats * 60 / averageBpm;
@@ -2969,7 +3073,6 @@ function repairRampEndpoint(endpoint) {
     return;
   }
   commitChange(() => {
-    range.key.ramp = { beats: totalBeats, anchors: [] };
     if (endpoint === "start") {
       range.key.time = startTime;
       if (range.index > 0) delete state.chart.timing.bpmKeys[range.index - 1].ramp;
@@ -2999,11 +3102,13 @@ $("#add-effect").addEventListener("click", () => {
 refs.scrubber.addEventListener("input", () => {
   state.playing = false;
   refs.audio.pause();
+  resetHitSoundSchedule(Number(refs.scrubber.value));
   refs.playToggle.textContent = "▶";
   setCurrentTime(Number(refs.scrubber.value), true);
 });
 refs.playToggle.addEventListener("click", togglePlayback);
 refs.stop.addEventListener("click", stopPlayback);
+refs.hitSoundVolume.addEventListener("input", updateHitSoundVolume);
 
 refs.duration.addEventListener("change", () => {
   commitChange(() => {
@@ -3186,7 +3291,10 @@ function animate() {
       ? refs.audio.currentTime
       : state.playStartedChartTime + performance.now() / 1000 - state.playStartedAt;
     if (time >= state.chart.timing.duration) stopPlayback();
-    else setCurrentTime(time, true);
+    else {
+      scheduleHitSounds(time);
+      setCurrentTime(time, true);
+    }
   }
   updatePreviewPose();
   requestAnimationFrame(animate);

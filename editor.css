@@ -419,7 +419,7 @@ label {
   min-width: 0;
   padding: 7px 10px;
   border-bottom: 1px solid var(--line);
-  grid-template-columns: 32px 32px 76px minmax(160px, 1fr) 76px auto auto;
+  grid-template-columns: 32px 32px auto 76px minmax(160px, 1fr) 76px auto auto;
   align-items: center;
   gap: 8px;
   background: rgba(20, 22, 27, 0.7);
@@ -432,6 +432,20 @@ label {
   align-items: baseline;
   gap: 7px;
   white-space: nowrap;
+}
+
+.transport-volume {
+  display: flex;
+  width: 92px;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 9px;
+}
+
+.transport-volume input[type="range"] {
+  width: 62px;
 }
 
 .transport-readout span {
