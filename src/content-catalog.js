@@ -166,13 +166,14 @@ export class ContentCatalog {
     if (!Array.isArray(manifest.charts) || manifest.charts.length === 0) {
       throw new Error(`Song manifest ${song.id} has no charts`);
     }
+    const cover = nonEmptyString(manifest.cover, `${song.id}.cover`);
 
     return {
       ...manifest,
       id: song.id,
       manifestUrl: manifestUrl.href,
       audioUrl: resolveOptionalUrl(manifest.audio, manifestUrl),
-      jacketUrl: resolveOptionalUrl(manifest.jacket, manifestUrl),
+      coverUrl: resolveOptionalUrl(cover, manifestUrl),
       charts: manifest.charts.map((chart) => ({
         ...chart,
         url: new URL(nonEmptyString(chart.file, `${song.id}.charts.file`), manifestUrl).href

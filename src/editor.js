@@ -5,6 +5,7 @@ import { LineGeometry } from "three/addons/lines/LineGeometry.js";
 import { LineMaterial } from "three/addons/lines/LineMaterial.js";
 import {
   EASING_PRESET_GROUPS,
+  CHART_TIME_STEP,
   TIMELINE_DEFINITIONS,
   beatAt,
   bpmAt,
@@ -25,13 +26,14 @@ import {
   timeAtBeat,
   trajectoryPoseAt,
   receiverFrameAt
-} from "./chart-core.js?v=20260831-3";
-import { CONFIG } from "./config.js?v=20260831-2";
+} from "./chart-core.js?v=20260901-5";
+import { CONFIG } from "./config.js?v=20260901-2";
 import { HitSoundPlayer } from "./hit-sounds.js?v=20260831-1";
 import { createProjectZip, projectJson, readProjectZip } from "./project-package.js?v=20260828-66";
 
 const editorConfig = CONFIG.editor;
 const colorConfig = CONFIG.colors;
+const HALF_TIME_STEP = CHART_TIME_STEP * 0.5;
 const cssColor = (color) => `#${color.toString(16).padStart(6, "0")}`;
 
 const $ = (selector) => document.querySelector(selector);
@@ -110,7 +112,7 @@ const refs = {
   chartFile: $("#chart-file-input"),
   projectPackage: $("#project-package-input"),
   audioFile: $("#audio-file-input"),
-  jacketFile: $("#jacket-file-input")
+  coverFile: $("#cover-file-input")
 };
 
 document.documentElement.style.setProperty("--waveform-width", `${editorConfig.waveform.width}px`);
@@ -158,8 +160,8 @@ const state = {
   projectChartFile: null,
   projectCharts: new Map(),
   audioSourceFile: null,
-  jacketSourceFile: null,
-  jacketUrl: null
+  coverSourceFile: null,
+  coverUrl: null
 };
 state.tempoMap = buildTempoMap(state.chart);
 
@@ -194,7 +196,7 @@ function formatTime(seconds) {
   const value = Math.max(0, Number(seconds) || 0);
   const minutes = Math.floor(value / 60);
   const remainder = value - minutes * 60;
-  return `${String(minutes).padStart(2, "0")}:${remainder.toFixed(3).padStart(6, "0")}`;
+  return `${String(minutes).padStart(2, "0")}:${remainder.toFixed(4).padStart(7, "0")}`;
 }
 
 function formatSigned(value) {
@@ -221,8 +223,7 @@ function setEditorPanelOpen(open) {
   state.editorPanelOpen = Boolean(open);
   refs.shell.classList.toggle("editor-panel-collapsed", !state.editorPanelOpen);
   refs.panelToggle.textContent = state.editorPanelOpen ? "\u2039" : "\u203a";
-  refs.panelToggle.title = state.editorPanelOpen ? "关闭编辑面板" : "打开编辑面板";
-  refs.panelToggle.setAttribute("aria-label", refs.panelToggle.title);
+  refs.panelToggle.setAttribute("aria-label", state.editorPanelOpen ? "关闭编辑面板" : "打开编辑面板");
   refs.panelToggle.setAttribute("aria-expanded", String(state.editorPanelOpen));
   requestAnimationFrame(resizePreview);
   setTimeout(resizePreview, 200);
@@ -304,7 +305,7 @@ function applyContinuousChange(control, key, mutator, message, {
   updateTimeUi(false);
   const duplicateEvent = events ? findDuplicateTimelineEvent(state.chart.timelines) : null;
   setStatus(duplicateEvent
-    ? `${duplicateEvent.label}：${duplicateEvent.duplicate.time.toFixed(3)}s 已有相同值 ${duplicateEvent.duplicate.value}`
+    ? `${duplicateEvent.label}：${duplicateEvent.duplicate.time.toFixed(4)}s 已有相同值 ${duplicateEvent.duplicate.value}`
     : message);
 }
 
@@ -335,7 +336,7 @@ function commitChange(mutator, message, { trajectory = false, events = false } =
   syncGamePreviewChart();
   const duplicateEvent = events ? findDuplicateTimelineEvent(state.chart.timelines) : null;
   setStatus(duplicateEvent
-    ? `${duplicateEvent.label}：${duplicateEvent.duplicate.time.toFixed(3)}s 已有相同值 ${duplicateEvent.duplicate.value}`
+    ? `${duplicateEvent.label}：${duplicateEvent.duplicate.time.toFixed(4)}s 已有相同值 ${duplicateEvent.duplicate.value}`
     : message);
   return true;
 }
@@ -417,7 +418,7 @@ function syncGamePreviewChart() {
   }
   if (!state.gamePreviewReady) return;
   const previewChart = structuredClone(state.chart);
-  if (state.jacketUrl) previewChart.meta.jacket = state.jacketUrl;
+  if (state.coverUrl) previewChart.meta.cover = state.coverUrl;
   refs.gamePreview.contentWindow.postMessage({
     type: "ParticleSoarPreviewChart",
     chart: previewChart,
@@ -724,7 +725,7 @@ function xToWPos(x, width) {
 }
 
 function holdGridStepAt(time) {
-  if (state.chart.timing.subdivision === 0) return 0.001;
+  if (state.chart.timing.subdivision === 0) return CHART_TIME_STEP;
   const tempoMap = state.tempoMap;
   const key = bpmKeyAt(state.chart, time);
   const keyIndex = state.chart.timing.bpmKeys.indexOf(key);
@@ -733,13 +734,13 @@ function holdGridStepAt(time) {
   const beatStep = key.beatsPerBar / state.chart.timing.subdivision;
   const nextSubdivision = Math.floor((currentBeat - keyBeat) / beatStep + 1 + 1e-7);
   const nextTime = timeAtBeat(state.chart, keyBeat + nextSubdivision * beatStep, tempoMap);
-  return Math.max(0.001, nextTime - time);
+  return Math.max(CHART_TIME_STEP, nextTime - time);
 }
 
 function defaultHoldEndTime(hitTime) {
   const duration = state.chart.timing.duration;
-  const step = Math.max(0.001, holdGridStepAt(hitTime));
-  return Math.min(duration, Math.max(hitTime + 0.001, snapTime(state.chart, hitTime + step, state.tempoMap)));
+  const step = Math.max(CHART_TIME_STEP, holdGridStepAt(hitTime));
+  return Math.min(duration, Math.max(hitTime + CHART_TIME_STEP, snapTime(state.chart, hitTime + step, state.tempoMap)));
 }
 
 function holdEndTimeAtY(note, y) {
@@ -973,7 +974,7 @@ function holdDraftFromEvent(event) {
   const type = noteTypeAtX(x, width);
   const duration = state.chart.timing.duration;
   let hitTime = snapTime(state.chart, yToTime(y));
-  if (hitTime >= duration) hitTime = Math.max(0, duration - 0.001);
+  if (hitTime >= duration) hitTime = Math.max(0, duration - CHART_TIME_STEP);
   return {
     id: crypto.randomUUID(),
     type,
@@ -1149,18 +1150,45 @@ function createTimelineCurve(events, range, height, color) {
     "aria-hidden": "true"
   });
   curve.style.setProperty("--event-color", color);
-  const sampleCount = Math.max(2, Math.min(
-    editorConfig.timelineCurve.maxSamples,
-    Math.ceil(height / editorConfig.timelineCurve.pixelsPerSample)
-  ));
   const pathData = [];
-  for (let index = 0; index <= sampleCount; index += 1) {
-    const time = state.chart.timing.duration * index / sampleCount;
+  const appendPoint = (time) => {
     const value = sampleTimeline(events, time, events[0]?.value ?? 0);
     const x = eventX(value, range);
     const y = timeToY(time);
-    pathData.push(`${index === 0 ? "M" : "L"}${x.toFixed(3)} ${y.toFixed(3)}`);
+    pathData.push(`${pathData.length === 0 ? "M" : "L"}${x.toFixed(3)} ${y.toFixed(3)}`);
+  };
+  appendPoint(0);
+  const boundaries = [0, ...events.map((event) => event.time), state.chart.timing.duration]
+    .filter((time) => time >= 0 && time <= state.chart.timing.duration)
+    .sort((left, right) => left - right)
+    .filter((time, index, values) => index === 0 || time - values[index - 1] > 1e-9);
+  let sourceIndex = 0;
+  const plans = [];
+  for (let boundaryIndex = 1; boundaryIndex < boundaries.length; boundaryIndex += 1) {
+    const startTime = boundaries[boundaryIndex - 1];
+    const endTime = boundaries[boundaryIndex];
+    while (sourceIndex + 1 < events.length && events[sourceIndex + 1].time <= startTime + 1e-9) sourceIndex += 1;
+    const sourceEvent = events[sourceIndex];
+    const nonlinearMinimum = sourceEvent?.easing === "formula"
+      ? editorConfig.timelineCurve.formulaSamples
+      : sourceEvent?.easing && sourceEvent.easing !== "linear" && sourceEvent.easing !== "hold"
+        ? editorConfig.timelineCurve.minNonlinearSamples
+        : 1;
+    const pixelSamples = Math.ceil(
+      (endTime - startTime) * state.pixelsPerSecond / editorConfig.timelineCurve.pixelsPerSample
+    );
+    plans.push({ startTime, endTime, desiredSamples: Math.max(1, pixelSamples, nonlinearMinimum) });
   }
+  const requiredSamples = plans.length;
+  const desiredExtras = plans.reduce((sum, plan) => sum + plan.desiredSamples - 1, 0);
+  const availableExtras = Math.max(0, editorConfig.timelineCurve.maxSamples - requiredSamples);
+  const extraScale = desiredExtras > availableExtras ? availableExtras / desiredExtras : 1;
+  plans.forEach(({ startTime, endTime, desiredSamples }) => {
+    const segmentSamples = 1 + Math.floor((desiredSamples - 1) * extraScale);
+    for (let sample = 1; sample <= segmentSamples; sample += 1) {
+      appendPoint(startTime + (endTime - startTime) * sample / segmentSamples);
+    }
+  });
   curve.appendChild(makeSvg("path", { d: pathData.join(" ") }));
   return curve;
 }
@@ -1243,7 +1271,7 @@ function renderEventTimelines() {
       key.style.top = `${timeToY(event.time)}px`;
       key.dataset.timelineId = definition.id;
       key.dataset.eventId = event.id;
-      key.title = `${event.time.toFixed(3)}s · ${event.value}`;
+      key.setAttribute("aria-label", `${event.time.toFixed(4)}s · ${event.value}`);
       column.appendChild(key);
     });
     const marker = document.createElement("output");
@@ -1277,7 +1305,7 @@ function addCameraKeyframesAtCurrentTime() {
   const sampledValues = cameraValuesForEditing(time);
   const existing = Object.fromEntries(cameraTimelineIds.map((timelineId) => [
     timelineId,
-    state.chart.timelines[timelineId].find((event) => Math.abs(event.time - time) < 0.0005)
+    state.chart.timelines[timelineId].find((event) => Math.abs(event.time - time) < HALF_TIME_STEP)
   ]));
   const missingIds = cameraTimelineIds.filter((timelineId) => !existing[timelineId]);
   const valuesChanged = cameraTimelineIds.some((timelineId) => (
@@ -1291,7 +1319,7 @@ function addCameraKeyframesAtCurrentTime() {
     renderNoteEditor();
     renderEventTimelines();
     renderInspector();
-    setStatus(`${time.toFixed(3)}s 的相机关键帧已是当前视角`);
+    setStatus(`${time.toFixed(4)}s 的相机关键帧已是当前视角`);
     return;
   }
 
@@ -1314,7 +1342,7 @@ function addCameraKeyframesAtCurrentTime() {
       }
       state.selectedEvents.add(eventToken(timelineId, timelineEvent.id));
     });
-  }, `已在 ${time.toFixed(3)}s 写入当前相机视角`, { trajectory: true, events: true });
+  }, `已在 ${time.toFixed(4)}s 写入当前相机视角`, { trajectory: true, events: true });
 }
 
 function addTimelineEvent(event, column) {
@@ -1603,7 +1631,7 @@ function handlePointerUp(event) {
   syncGamePreviewChart();
   const duplicateEvent = wasEvent ? findDuplicateTimelineEvent(state.chart.timelines) : null;
   setStatus(duplicateEvent
-    ? `${duplicateEvent.label}：${duplicateEvent.duplicate.time.toFixed(3)}s 已有相同值 ${duplicateEvent.duplicate.value}`
+    ? `${duplicateEvent.label}：${duplicateEvent.duplicate.time.toFixed(4)}s 已有相同值 ${duplicateEvent.duplicate.value}`
     : wasEvent ? "已移动事件" : "已移动音符");
 }
 
@@ -1672,7 +1700,7 @@ function pasteNotes(clipboard) {
     };
     if (note.kind === "hold") {
       note.endTime = Math.max(
-        hitTime + 0.001,
+        hitTime + CHART_TIME_STEP,
         Math.min(state.chart.timing.duration, source.endTime + delta)
       );
     }
@@ -1723,15 +1751,15 @@ function renderInspector() {
   if (note) {
     $("#inspect-note-type").textContent = noteTypeLabels[note.type];
     $("#inspect-note-kind").value = note.kind;
-    $("#inspect-note-time").value = note.hitTime.toFixed(3);
-    $("#inspect-note-end").value = (note.endTime ?? note.hitTime + 1).toFixed(3);
+    $("#inspect-note-time").value = note.hitTime.toFixed(4);
+    $("#inspect-note-end").value = (note.endTime ?? note.hitTime + 1).toFixed(4);
     $("#inspect-note-wpos").value = note.wPos.toFixed(3);
     $("#inspect-note-end-row").hidden = note.kind !== "hold";
     $("#inspect-note-wpos-row").hidden = note.type !== "middle";
   } else if (timelineSelection) {
     const definition = TIMELINE_DEFINITIONS.find((item) => item.id === timelineSelection.timelineId);
     $("#inspect-event-title").textContent = definition.label;
-    $("#inspect-event-time").value = timelineSelection.event.time.toFixed(3);
+    $("#inspect-event-time").value = timelineSelection.event.time.toFixed(4);
     $("#inspect-event-value").value = timelineSelection.event.value.toFixed(4);
     $("#inspect-event-easing").value = timelineSelection.event.easing;
     $("#inspect-event-formula").value = timelineSelection.event.formula ?? "t";
@@ -1839,7 +1867,7 @@ function renderBpmRampEditor(selected, syncEditor = true) {
     item.innerHTML = `
       <small>${isBar ? "小节" : "节拍"}</small>
       <input class="ramp-anchor-beat" type="number" min="1" max="${maxPosition}" step="1" value="${position}" aria-label="${isBar ? "相对小节数" : "相对拍数"}">
-      <input class="ramp-anchor-time" type="number" min="${selected.time + 0.001}" max="${next.time - 0.001}" step="0.001" value="${anchor.time.toFixed(3)}" aria-label="锚点时间">
+      <input class="ramp-anchor-time" type="number" min="${selected.time + CHART_TIME_STEP}" max="${next.time - CHART_TIME_STEP}" step="${CHART_TIME_STEP}" value="${anchor.time.toFixed(4)}" aria-label="锚点时间">
       <button class="remove-ramp-anchor" type="button" aria-label="删除变速锚点">×</button>`;
     refs.bpmRampAnchorList.appendChild(item);
   });
@@ -1862,7 +1890,7 @@ function renderBpmKeys(syncEditor = true) {
   const selected = keys.find((key) => key.id === state.selectedBpmKey);
   refs.bpmKeyEditor.hidden = !selected;
   if (selected && syncEditor) {
-    refs.bpmKeyTime.value = selected.time.toFixed(3);
+    refs.bpmKeyTime.value = selected.time.toFixed(4);
     refs.bpmValue.value = selected.bpm;
     refs.bpmBeatsPerBar.value = selected.beatsPerBar;
   }
@@ -1911,7 +1939,7 @@ function rebuildEverything() {
 
 // Time and audio
 const HIT_SOUND_LOOKAHEAD_SECONDS = editorConfig.audio.hitSoundLookaheadSeconds;
-const HIT_SOUND_TIME_EPSILON = 0.0005;
+const HIT_SOUND_TIME_EPSILON = HALF_TIME_STEP;
 
 function firstNoteAtOrAfter(time) {
   const notes = state.chart.notes;
@@ -2185,13 +2213,13 @@ async function loadAudio(file, { updateChart = true } = {}) {
   syncChartControls();
 }
 
-async function loadJacket(file, { updateChart = true } = {}) {
+async function loadCover(file, { updateChart = true } = {}) {
   if (!file) return;
   const source = await snapshotSourceFile(file);
-  if (state.jacketUrl) URL.revokeObjectURL(state.jacketUrl);
-  state.jacketSourceFile = source.file;
-  state.jacketUrl = URL.createObjectURL(source.file);
-  state.chart.meta.jacket = file.name;
+  if (state.coverUrl) URL.revokeObjectURL(state.coverUrl);
+  state.coverSourceFile = source.file;
+  state.coverUrl = URL.createObjectURL(source.file);
+  state.chart.meta.cover = file.name;
   if (updateChart) setDirty(true);
   syncGamePreviewChart();
   setStatus(`已加载曲绘 ${file.name}`);
@@ -2307,7 +2335,7 @@ function blankDifficultyChart() {
     composer: current.meta.composer,
     illustrator: current.meta.illustrator,
     audioFile: current.meta.audioFile,
-    jacket: current.meta.jacket
+    cover: current.meta.cover
   };
   blank.timing.duration = current.timing.duration;
   blank.timing.offset = current.timing.offset;
@@ -2387,7 +2415,7 @@ function rebuildProjectMeta() {
     composer: state.chart.meta.composer,
     illustrator: state.chart.meta.illustrator,
     ...(state.chart.meta.audioFile ? { audio: state.chart.meta.audioFile } : {}),
-    ...(state.chart.meta.jacket ? { jacket: state.chart.meta.jacket } : {}),
+    ...(state.chart.meta.cover ? { cover: state.chart.meta.cover } : {}),
     charts: files.map((file) => difficultyEntry(file, state.projectCharts.get(file)))
   };
 }
@@ -2397,8 +2425,8 @@ async function collectProjectEntries() {
   if (state.audioSourceFile) {
     state.chart.meta.audioFile = safeFileName(state.chart.meta.audioFile || state.audioSourceFile.name, "audio.ogg");
   }
-  if (state.jacketSourceFile) {
-    state.chart.meta.jacket = safeFileName(state.chart.meta.jacket || state.jacketSourceFile.name, "jacket.webp");
+  if (state.coverSourceFile) {
+    state.chart.meta.cover = safeFileName(state.chart.meta.cover || state.coverSourceFile.name, "cover.webp");
   }
   for (const [file, chart] of state.projectCharts) {
     chart.meta.title = state.chart.meta.title;
@@ -2406,8 +2434,8 @@ async function collectProjectEntries() {
     chart.meta.illustrator = state.chart.meta.illustrator;
     if (state.chart.meta.audioFile) chart.meta.audioFile = state.chart.meta.audioFile;
     else delete chart.meta.audioFile;
-    if (state.chart.meta.jacket) chart.meta.jacket = state.chart.meta.jacket;
-    else delete chart.meta.jacket;
+    if (state.chart.meta.cover) chart.meta.cover = state.chart.meta.cover;
+    else delete chart.meta.cover;
     state.projectCharts.set(file, chart);
   }
   state.projectMeta = rebuildProjectMeta();
@@ -2416,7 +2444,7 @@ async function collectProjectEntries() {
     { name: "meta.json", contents: JSON.stringify(state.projectMeta, null, 2) },
     ...[...state.projectCharts].map(([name, chart]) => ({ name, contents: JSON.stringify(compactChart(chart)) })),
     ...(state.audioSourceFile ? [{ name: state.chart.meta.audioFile, contents: state.audioSourceFile }] : []),
-    ...(state.jacketSourceFile ? [{ name: state.chart.meta.jacket, contents: state.jacketSourceFile }] : [])
+    ...(state.coverSourceFile ? [{ name: state.chart.meta.cover, contents: state.coverSourceFile }] : [])
   ];
 }
 
@@ -2435,7 +2463,7 @@ async function saveProject() {
     if (hasProjectDirectoryApi()) {
       const directory = await writableProjectDirectory();
       // Resolve every source before replacing any destination file. In particular,
-      // an opened project's audio and jacket may have originated in this directory.
+      // An opened project's audio and cover may have originated in this directory.
       const materializedEntries = await materializeProjectEntries(entries);
       for (const entry of materializedEntries) await writeProjectFile(directory, entry.name, entry.contents);
       refs.projectLocation.textContent = directory.name;
@@ -2456,11 +2484,11 @@ async function saveProject() {
 
 function clearProjectResources() {
   if (state.audioUrl) URL.revokeObjectURL(state.audioUrl);
-  if (state.jacketUrl) URL.revokeObjectURL(state.jacketUrl);
+  if (state.coverUrl) URL.revokeObjectURL(state.coverUrl);
   state.audioUrl = null;
-  state.jacketUrl = null;
+  state.coverUrl = null;
   state.audioSourceFile = null;
-  state.jacketSourceFile = null;
+  state.coverSourceFile = null;
   state.waveformPeaks = null;
   state.waveformPitch = null;
   refs.audio.pause();
@@ -2517,9 +2545,10 @@ async function openProject() {
       const audio = await (await directory.getFileHandle(meta.audio)).getFile();
       await loadAudio(audio, { updateChart: false });
     }
-    if (meta.jacket) {
-      const jacket = await (await directory.getFileHandle(meta.jacket)).getFile();
-      await loadJacket(jacket, { updateChart: false });
+    const coverName = meta.cover;
+    if (coverName) {
+      const cover = await (await directory.getFileHandle(coverName)).getFile();
+      await loadCover(cover, { updateChart: false });
     }
     setDirty(false);
     setStatus(`工程已打开：${directory.name}/${entry.file}`);
@@ -2560,8 +2589,9 @@ async function loadProjectPackage(file) {
     if (meta.audio && files.has(meta.audio)) {
       await loadAudio(new File([files.get(meta.audio)], meta.audio, { type: fileMimeType(meta.audio) }), { updateChart: false });
     }
-    if (meta.jacket && files.has(meta.jacket)) {
-      await loadJacket(new File([files.get(meta.jacket)], meta.jacket, { type: fileMimeType(meta.jacket) }), { updateChart: false });
+    const coverName = meta.cover;
+    if (coverName && files.has(coverName)) {
+      await loadCover(new File([files.get(coverName)], coverName, { type: fileMimeType(coverName) }), { updateChart: false });
     }
     setDirty(false);
     setStatus(`工程包已打开：${file.name}/${entry.file}`);
@@ -2822,7 +2852,7 @@ $("#inspect-note-time").addEventListener("input", (event) => {
   applyContinuousChange(event.target, `note:${note.id}:hitTime`, () => {
     const duration = note.kind === "hold" ? note.endTime - note.hitTime : 0;
     note.hitTime = snapTime(state.chart, value);
-    if (note.kind === "hold") note.endTime = Math.min(state.chart.timing.duration, note.hitTime + Math.max(0.001, duration));
+    if (note.kind === "hold") note.endTime = Math.min(state.chart.timing.duration, note.hitTime + Math.max(CHART_TIME_STEP, duration));
   }, "音符时间已更新", { notes: true });
 });
 
@@ -2831,7 +2861,7 @@ $("#inspect-note-end").addEventListener("input", (event) => {
   const note = selectedNote();
   if (value === null || !note || note.kind !== "hold") return;
   applyContinuousChange(event.target, `note:${note.id}:endTime`, () => {
-    note.endTime = Math.min(state.chart.timing.duration, Math.max(note.hitTime + 0.001, value));
+    note.endTime = Math.min(state.chart.timing.duration, Math.max(note.hitTime + CHART_TIME_STEP, value));
   }, "Hold 结束时间已更新", { notes: true });
 });
 
@@ -2889,7 +2919,7 @@ refs.bpmList.addEventListener("click", (event) => {
 });
 
 $("#add-bpm-key").addEventListener("click", () => {
-  const existing = state.chart.timing.bpmKeys.find((key) => Math.abs(key.time - state.currentTime) < 0.0005);
+  const existing = state.chart.timing.bpmKeys.find((key) => Math.abs(key.time - state.currentTime) < HALF_TIME_STEP);
   if (existing) {
     state.selectedBpmKey = existing.id;
     renderBpmKeys();
@@ -2931,9 +2961,9 @@ refs.bpmKeyTime.addEventListener("input", (event) => {
   applyContinuousChange(event.target, `bpm:${key.id}:time`, () => {
     const keys = state.chart.timing.bpmKeys;
     const index = keys.indexOf(key);
-    const minimum = index > 0 ? keys[index - 1].time + 0.001 : 0;
+    const minimum = index > 0 ? keys[index - 1].time + CHART_TIME_STEP : 0;
     const maximum = index < keys.length - 1
-      ? keys[index + 1].time - 0.001
+      ? keys[index + 1].time - CHART_TIME_STEP
       : state.chart.timing.duration;
     key.time = Math.max(minimum, Math.min(maximum, value));
   }, "BPM Key 时间已更新", { bpm: true });
@@ -2994,7 +3024,7 @@ refs.bpmRampBeats.addEventListener("input", (event) => {
 function addRampAnchor(kind) {
   const range = selectedBpmRange();
   if (!range?.next || !range.key.ramp) return;
-  if (state.currentTime <= range.key.time + 0.0005 || state.currentTime >= range.next.time - 0.0005) {
+  if (state.currentTime <= range.key.time + HALF_TIME_STEP || state.currentTime >= range.next.time - HALF_TIME_STEP) {
     setStatus("请将播放位置放在所选 BpmKey 与下一个 BpmKey 之间");
     return;
   }
@@ -3045,7 +3075,7 @@ refs.bpmRampAnchorList.addEventListener("input", (event) => {
     }, "变速锚点拍数已更新");
   } else if (event.target.classList.contains("ramp-anchor-time")) {
     applyRampContinuousChange(event.target, `ramp:${range.key.id}:${anchor.id}:time`, () => {
-      anchor.time = Math.max(range.key.time + 0.001, Math.min(range.next.time - 0.001, value));
+      anchor.time = Math.max(range.key.time + CHART_TIME_STEP, Math.min(range.next.time - CHART_TIME_STEP, value));
     }, "变速锚点时间已更新");
   }
 });
@@ -3225,13 +3255,13 @@ $("#save-project").addEventListener("click", saveProject);
 $("#load-chart").addEventListener("click", () => refs.chartFile.click());
 $("#save-chart").addEventListener("click", exportChartJson);
 $("#load-audio").addEventListener("click", () => refs.audioFile.click());
-$("#load-jacket").addEventListener("click", () => refs.jacketFile.click());
+$("#load-cover").addEventListener("click", () => refs.coverFile.click());
 $("#undo-button").addEventListener("click", undo);
 $("#redo-button").addEventListener("click", redo);
 refs.chartFile.addEventListener("change", () => loadChartFile(refs.chartFile.files[0]));
 refs.projectPackage.addEventListener("change", () => loadProjectPackage(refs.projectPackage.files[0]));
 refs.audioFile.addEventListener("change", () => loadAudio(refs.audioFile.files[0]).catch((error) => setStatus(`音乐加载失败：${error.message}`)));
-refs.jacketFile.addEventListener("change", () => loadJacket(refs.jacketFile.files[0]).catch((error) => setStatus(`曲绘加载失败：${error.message}`)));
+refs.coverFile.addEventListener("change", () => loadCover(refs.coverFile.files[0]).catch((error) => setStatus(`曲绘加载失败：${error.message}`)));
 refs.panelToggle.addEventListener("click", () => setEditorPanelOpen(!state.editorPanelOpen));
 refs.viewToggle.addEventListener("click", toggleView);
 refs.addCameraKeyframe.addEventListener("click", addCameraKeyframesAtCurrentTime);

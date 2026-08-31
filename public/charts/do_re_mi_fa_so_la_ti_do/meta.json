@@ -1,0 +1,15 @@
+{
+  "format": "particlesoar-song@1",
+  "title": "do-re-mi-fa-so-la-ti-do",
+  "composer": "Porter Robinson",
+  "illustrator": "who?",
+  "audio": "Porter Robinson - do-re-mi-fa-so-la-ti-do (Cut).mp3",
+  "charts": [
+    {
+      "file": "hs.json",
+      "difficultyLabel": "LD",
+      "level": 30,
+      "charter": "second bear"
+    }
+  ]
+}

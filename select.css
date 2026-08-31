@@ -115,6 +115,7 @@ body { position: relative; }
   transform: translate(-50%, -50%);
   cursor: pointer;
   isolation: isolate;
+  user-select: none;
   transition: opacity 180ms ease, filter 180ms ease;
 }
 
@@ -158,6 +159,9 @@ body { position: relative; }
   height: 100%;
   border-radius: 50%;
   object-fit: cover;
+  pointer-events: none;
+  user-select: none;
+  -webkit-user-drag: none;
   transition: filter 180ms ease, transform 220ms ease;
 }
 
@@ -205,7 +209,6 @@ body { position: relative; }
   white-space: nowrap;
 }
 
-.song-node:not(.is-locked) .song-node-status { color: var(--cyan); }
 .song-node.is-selected .song-node-status { opacity: 0; }
 
 .difficulty-picker {

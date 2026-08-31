@@ -4,7 +4,7 @@
   "composer": "Virtual Self",
   "illustrator": "who?",
   "audio": "Virtual Self - Particle Arts (Cut).mp3",
-  "jacket": "particle-arts-jacket.png",
+  "cover": "particle-arts-cover.png",
   "charts": [
     {
       "file": "ld.json",

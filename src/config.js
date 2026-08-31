@@ -19,7 +19,11 @@ export const CONFIG = deepFreeze({
   },
   chart: {
     format: "ParticleSoarChart/v1",
+    timeStepSeconds: 0.0001,
     trajectorySampleSeconds: 0.04,
+    trajectoryMaxTurnDegrees: 1.5,
+    trajectoryMaxIntegrationError: 0.015,
+    trajectoryMaxSubdivisions: 4,
     noteTypeCodes: {
       middle: "m",
       left: "l",
@@ -207,7 +211,7 @@ export const CONFIG = deepFreeze({
       playfieldClearDepthFeather: 2
     },
     sideRails: {
-      pointCount: 32,
+      pointCount: 64,
       maxOpacity: 0.5,
       minPulse: 0.25,
       pulseSpeed: 3.4
@@ -299,7 +303,9 @@ export const CONFIG = deepFreeze({
     },
     timelineCurve: {
       pixelsPerSample: 4,
-      maxSamples: 1400
+      minNonlinearSamples: 12,
+      formulaSamples: 32,
+      maxSamples: 6000
     },
     renderer: {
       maxPixelRatio: 1.75,

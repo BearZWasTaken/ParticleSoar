@@ -16,7 +16,7 @@
   </div>
   <div class="hud">
     <div class="brand">
-      <span class="mark" id="song-jacket" role="img" aria-label="Song jacket"></span>
+      <span class="mark" id="song-cover" role="img" aria-label="Song cover"></span>
       <div class="song-copy">
         <div class="title" id="song-title">Demo Track</div>
         <div class="subtitle" id="song-composer">Demo Composer</div>
@@ -87,9 +87,9 @@ import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js"
 import { Line2 } from "three/addons/lines/Line2.js";
 import { LineGeometry } from "three/addons/lines/LineGeometry.js";
 import { LineMaterial } from "three/addons/lines/LineMaterial.js";
-import { CHART_FORMAT, chartForGame } from "./src/chart-core.js?v=20260829-2";
-import { CONFIG } from "./src/config.js?v=20260829-1";
-import { loadContentCatalog } from "./src/content-catalog.js?v=20260829-1";
+import { CHART_FORMAT, chartForGame } from "./src/chart-core.js?v=20260901-5";
+import { CONFIG } from "./src/config.js?v=20260901-2";
+import { loadContentCatalog } from "./src/content-catalog.js?v=20260901-1";
 import {
   DEFAULT_PLAYER_SETTINGS,
   PlayerProfileStore
@@ -146,7 +146,7 @@ const songProgressFill = document.getElementById("song-progress-fill");
 const songProgressMarkers = document.getElementById("song-progress-markers");
 const songTitleReadout = document.getElementById("song-title");
 const songComposerReadout = document.getElementById("song-composer");
-const songJacket = document.getElementById("song-jacket");
+const songCover = document.getElementById("song-cover");
 const difficultyBadge = document.getElementById("difficulty-badge");
 const difficultyNameReadout = document.getElementById("difficulty-name");
 const difficultyLevelReadout = document.getElementById("difficulty-level");
@@ -1778,7 +1778,7 @@ function configureCameraMount(initialReceiverState) {
   cameraMount.referenceReceiverPosition.copy(initialReceiverState.position);
 }
 
-function makeFallbackJacket(seed = "ParticleSoar") {
+function makeFallbackCover(seed = "ParticleSoar") {
   const size = 256;
   const cover = document.createElement("canvas");
   cover.width = size;
@@ -1813,12 +1813,12 @@ function applyChartMetadata(chart) {
     .trim()
     .replace(/^-+|-+$/g, "") || metaDefaults.difficultyLabel;
   const difficultyLevel = meta.level ?? meta.difficulty?.level ?? "--";
-  const jacket = meta.jacket ?? makeFallbackJacket(title);
+  const cover = meta.cover ?? makeFallbackCover(title);
 
   songTitleReadout.textContent = title;
   songComposerReadout.textContent = composer;
-  songJacket.setAttribute("aria-label", `${title} jacket`);
-  songJacket.style.backgroundImage = `url(${JSON.stringify(jacket)})`;
+  songCover.setAttribute("aria-label", `${title} cover`);
+  songCover.style.backgroundImage = `url(${JSON.stringify(cover)})`;
   difficultyNameReadout.textContent = meta.difficultyText ?? `-${difficultyName}-`;
   difficultyLevelReadout.textContent = meta.difficultyText ? "" : difficultyLevel;
   difficultyBadge.setAttribute("aria-label", `Chart difficulty: ${difficultyName} ${difficultyLevel}`);
@@ -2009,7 +2009,7 @@ async function loadSelectedSong() {
   const songId = launchParameters.get("song");
   if (!songId || editorPreviewMode) return false;
   const catalog = await loadContentCatalog(
-    "./public/content/catalog.json?v=20260829-1",
+    "./public/content/catalog.json?v=20260901-1",
     globalThis.fetch,
     { cache: "no-store" }
   );
@@ -2029,7 +2029,7 @@ async function loadSelectedSong() {
     charter: chartEntry.charter ?? chart.meta?.charter,
     difficultyLabel: chartEntry.difficultyLabel ?? chart.meta?.difficultyLabel,
     level: chartEntry.level ?? chart.meta?.level,
-    ...(manifest.jacketUrl ? { jacket: manifest.jacketUrl } : {})
+    ...(manifest.coverUrl ? { cover: manifest.coverUrl } : {})
   };
 
   const chapterId = launchParameters.get("chapter");
@@ -2190,11 +2190,11 @@ receiverGroup.add(receiverRing);
 const sideRailVisual = gameConfig.sideRails;
 
 function makeSideRail(color) {
-  const positions = new Float32Array((sideTrajectoryPointCount - 1) * 2 * 3);
+  const positions = new Float32Array(sideTrajectoryPointCount * 3);
   const geometry = new THREE.BufferGeometry();
   geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
   geometry.setDrawRange(0, 0);
-  const rail = new THREE.LineSegments(
+  const rail = new THREE.Line(
     geometry,
     new THREE.LineBasicMaterial({
       color,
@@ -2218,18 +2218,15 @@ scene.add(leftRail, rightRail);
 function writeSideTrajectoryGeometry(rail, worldPoints, pointCount) {
   const positions = rail.userData.positions;
   let offset = 0;
-  for (let i = 0; i < pointCount - 1; i += 1) {
+  for (let i = 0; i < pointCount; i += 1) {
     positions[offset++] = worldPoints[i].x;
     positions[offset++] = worldPoints[i].y;
     positions[offset++] = worldPoints[i].z;
-    positions[offset++] = worldPoints[i + 1].x;
-    positions[offset++] = worldPoints[i + 1].y;
-    positions[offset++] = worldPoints[i + 1].z;
   }
-  const introSegmentCount = activeLaunch && launchIntro.phase !== "playing"
+  const introPointCount = activeLaunch && launchIntro.phase !== "playing"
     ? Math.floor((pointCount - 1) * launchVisualProgress())
     : pointCount - 1;
-  rail.geometry.setDrawRange(0, Math.max(0, introSegmentCount) * 2);
+  rail.geometry.setDrawRange(0, Math.max(0, introPointCount) + 1);
   rail.geometry.getAttribute("position").needsUpdate = true;
 }
 

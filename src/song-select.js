@@ -1,4 +1,4 @@
-import { loadContentCatalog } from "./content-catalog.js?v=20260829-1";
+import { loadContentCatalog } from "./content-catalog.js?v=20260901-1";
 import { difficultyColor } from "./difficulty.js?v=20260828-4";
 import { PlayerProfileStore } from "./player-profile.js?v=20260829-1";
 import { resultGrade } from "./result-core.js?v=20260829-2";
@@ -28,7 +28,7 @@ let progress;
 let chapterEntries = [];
 let focusedNode = null;
 
-function fallbackJacket(title) {
+function fallbackCover(title) {
   const canvas = document.createElement("canvas");
   canvas.width = 256;
   canvas.height = 256;
@@ -247,13 +247,17 @@ function renderSongNodes() {
     const image = document.createElement("img");
     image.alt = "";
     image.draggable = false;
-    image.src = catalog.resolveSongAsset(song, summary.jacket) ?? fallbackJacket(summary.title ?? song.id);
-    image.addEventListener("error", () => { image.src = fallbackJacket(summary.title ?? song.id); }, { once: true });
+    image.src = catalog.resolveSongAsset(song, summary.cover) ?? fallbackCover(summary.title ?? song.id);
+    image.addEventListener("error", () => { image.src = fallbackCover(summary.title ?? song.id); }, { once: true });
 
-    const status = document.createElement("span");
-    status.className = "song-node-status";
-    status.textContent = unlocked ? "SELECT" : "LOCKED";
-    button.append(image, status, makeDifficultyPicker(song, charts, unlocked));
+    button.append(image);
+    if (!unlocked) {
+      const status = document.createElement("span");
+      status.className = "song-node-status";
+      status.textContent = "LOCKED";
+      button.append(status);
+    }
+    button.append(makeDifficultyPicker(song, charts, unlocked));
     button.addEventListener("mouseenter", () => showSongInfo(song, unlocked, button));
     button.addEventListener("mouseleave", hideSongInfo);
     button.addEventListener("focus", () => showSongInfo(song, unlocked, button));
@@ -318,7 +322,7 @@ function setupStarfield() {
 async function initialize() {
   setupStarfield();
   catalog = await loadContentCatalog(
-    "./public/content/catalog.json?v=20260829-1",
+    "./public/content/catalog.json?v=20260901-1",
     globalThis.fetch,
     { cache: "no-store" }
   );

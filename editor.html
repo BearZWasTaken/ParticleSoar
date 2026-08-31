@@ -18,10 +18,10 @@
   <div class="editor-shell editor-panel-collapsed">
     <section class="preview-stage" aria-label="3D trajectory preview">
       <canvas id="preview-canvas" hidden></canvas>
-      <iframe id="game-preview" src="./index.html?editorPreview=1&v=20260828-66" title="游玩场景预览"></iframe>
+      <iframe id="game-preview" src="./index.html?editorPreview=1&v=20260828-66" aria-label="游玩场景预览"></iframe>
       <div class="preview-state">
         <span id="dirty-state">已保存</span>
-        <button id="view-toggle" type="button" title="切换自由/游玩视角"><strong id="view-mode">FREE</strong></button>
+        <button id="view-toggle" type="button" aria-label="切换自由或游玩视角"><strong id="view-mode">FREE</strong></button>
       </div>
     </section>
     <div class="camera-state" aria-label="相机相对参数">
@@ -40,7 +40,6 @@
       <button
         id="add-camera-keyframe"
         type="button"
-        title="在当前时间添加全部相机关键帧（K）"
         aria-label="在当前时间添加全部相机关键帧"
       >＋ KEY</button>
     </div>
@@ -48,21 +47,20 @@
       id="toggle-editor-panel"
       class="editor-panel-toggle"
       type="button"
-      title="打开编辑面板"
       aria-label="打开编辑面板"
       aria-expanded="false"
     >&rsaquo;</button>
 
     <section class="transport">
-      <button id="play-toggle" class="icon-button" type="button" title="播放/暂停" aria-label="播放">▶</button>
-      <button id="stop-button" class="icon-button" type="button" title="停止" aria-label="停止">■</button>
-      <label class="transport-volume" title="打击音效音量">
+      <button id="play-toggle" class="icon-button" type="button" aria-label="播放">▶</button>
+      <button id="stop-button" class="icon-button" type="button" aria-label="停止">■</button>
+      <label class="transport-volume">
         <span>SFX</span>
         <input id="hit-sound-volume" type="range" min="0" max="1" step="0.01" aria-label="打击音效音量">
       </label>
-      <span id="current-time">00:00.000</span>
-      <input id="scrubber" type="range" min="0" max="30" step="0.001" value="0" aria-label="谱面进度">
-      <span id="duration-time">00:30.000</span>
+      <span id="current-time">00:00.0000</span>
+      <input id="scrubber" type="range" min="0" max="30" step="0.0001" value="0" aria-label="谱面进度">
+      <span id="duration-time">00:30.0000</span>
       <div class="transport-readout"><span>当前 BPM</span><strong id="current-bpm">120.00</strong></div>
       <div class="transport-readout"><span>拍数</span><strong id="current-beats">4</strong></div>
     </section>
@@ -75,9 +73,9 @@
       </div>
       <div class="command-strip">
         <div class="difficulty-manager">
-          <select id="difficulty-select" aria-label="当前难度" title="切换当前难度"></select>
-          <button id="add-difficulty" class="icon-button" type="button" title="新增难度" aria-label="新增难度">＋</button>
-          <button id="remove-difficulty" class="icon-button" type="button" title="从工程移除当前难度" aria-label="移除当前难度">−</button>
+          <select id="difficulty-select" aria-label="当前难度"></select>
+          <button id="add-difficulty" class="icon-button" type="button" aria-label="新增难度">＋</button>
+          <button id="remove-difficulty" class="icon-button" type="button" aria-label="移除当前难度">−</button>
         </div>
         <button id="new-chart" type="button">新建</button>
         <button id="open-project" type="button">打开工程</button>
@@ -85,9 +83,9 @@
         <button id="load-chart" type="button">导入 JSON</button>
         <button id="save-chart" type="button">导出 JSON</button>
         <button id="load-audio" type="button">加载音乐</button>
-        <button id="load-jacket" type="button">加载曲绘</button>
-        <button id="undo-button" class="icon-button" type="button" title="撤销" aria-label="撤销">↶</button>
-        <button id="redo-button" class="icon-button" type="button" title="重做" aria-label="重做">↷</button>
+        <button id="load-cover" type="button">加载曲绘</button>
+        <button id="undo-button" class="icon-button" type="button" aria-label="撤销">↶</button>
+        <button id="redo-button" class="icon-button" type="button" aria-label="重做">↷</button>
       </div>
       <div class="chart-fields">
         <label>曲名<input id="meta-title"></label>
@@ -107,8 +105,8 @@
             <button class="active" data-note-kind="tap" type="button">TAP</button>
             <button data-note-kind="hold" type="button">HOLD</button>
           </div>
-          <button id="copy-selection" type="button" title="复制所选音符或事件（Ctrl+C）">复制</button>
-          <button id="paste-selection" type="button" title="粘贴到当前时间（Ctrl+V）">粘贴</button>
+          <button id="copy-selection" type="button">复制</button>
+          <button id="paste-selection" type="button">粘贴</button>
           <button id="delete-selection" type="button">删除所选</button>
           <label>缩放<input id="note-zoom" type="range"></label>
         </header>
@@ -121,7 +119,7 @@
         </div>
         <footer class="batch-strip">
           <span><strong id="selected-note-count">0</strong> 个音符已选择</span>
-          <label>&Delta; Time<input id="batch-note-time" type="number" step="0.001" value="0"></label>
+          <label>&Delta; Time<input id="batch-note-time" type="number" step="0.0001" value="0"></label>
           <label>&Delta; wPos<input id="batch-note-wpos" type="number" step="0.05" value="0"></label>
           <button id="apply-note-batch" type="button">应用批量修改</button>
         </footer>
@@ -135,7 +133,7 @@
         <div class="event-timelines" id="event-timelines"></div>
         <footer class="batch-strip">
           <span><strong id="selected-event-count">0</strong> 个事件已选择</span>
-          <label>&Delta; Time<input id="batch-event-time" type="number" step="0.001" value="0"></label>
+          <label>&Delta; Time<input id="batch-event-time" type="number" step="0.0001" value="0"></label>
           <label>&times; Value<input id="batch-event-scale" type="number" step="0.1" value="1"></label>
           <div class="batch-action-buttons">
             <button id="apply-event-batch" type="button">应用修改</button>
@@ -151,13 +149,13 @@
           <h2>音符</h2>
           <label>类型<output id="inspect-note-type"></output></label>
           <label>形态<select id="inspect-note-kind"><option value="tap">Tap</option><option value="hold">Hold</option></select></label>
-          <label>Hit Time<input id="inspect-note-time" type="number" step="0.001"></label>
-          <label id="inspect-note-end-row">End Time<input id="inspect-note-end" type="number" step="0.001"></label>
+          <label>Hit Time<input id="inspect-note-time" type="number" step="0.0001"></label>
+          <label id="inspect-note-end-row">End Time<input id="inspect-note-end" type="number" step="0.0001"></label>
           <label id="inspect-note-wpos-row">wPos<input id="inspect-note-wpos" type="number" min="-1" max="1" step="0.01"></label>
         </form>
         <form id="event-inspector" hidden>
           <h2 id="inspect-event-title">事件</h2>
-          <label>时间<input id="inspect-event-time" type="number" step="0.001"></label>
+          <label>时间<input id="inspect-event-time" type="number" step="0.0001"></label>
           <label>数值<input id="inspect-event-value" type="number" step="0.01"></label>
           <label>缓动<select id="inspect-event-easing"></select></label>
           <label id="formula-row">公式<input id="inspect-event-formula" placeholder="t*t 或 sin(t*pi/2)"></label>
@@ -172,7 +170,7 @@
           </div>
           <div id="bpm-key-list"></div>
           <form id="bpm-key-editor" class="bpm-key-editor">
-            <label>时间<input id="bpm-key-time" type="number" min="0" step="0.001"></label>
+            <label>时间<input id="bpm-key-time" type="number" min="0" step="0.0001"></label>
             <label>BPM<input id="bpm-value" type="number" min="1" step="0.01"></label>
             <label>每小节拍数<input id="bpm-beats-per-bar" type="number" min="1" step="1"></label>
           </form>
@@ -246,9 +244,9 @@
   <input id="chart-file-input" type="file" accept="application/json,.json" hidden>
   <input id="project-package-input" type="file" accept="application/zip,.zip,.psproject" hidden>
   <input id="audio-file-input" type="file" accept="audio/*" hidden>
-  <input id="jacket-file-input" type="file" accept="image/*" hidden>
+  <input id="cover-file-input" type="file" accept="image/*" hidden>
   <audio id="audio-player" preload="auto"></audio>
 
-  <script type="module" src="./src/editor.js?v=20260831-3"></script>
+  <script type="module" src="./src/editor.js?v=20260901-6"></script>
 </body>
 </html>

@@ -1,4 +1,4 @@
-import { CONFIG } from "./config.js?v=20260829-1";
+import { CONFIG } from "./config.js?v=20260901-2";
 
 const chartConfig = CONFIG.chart;
 const chartDefaults = chartConfig.defaults;
@@ -8,6 +8,7 @@ const timelineDefault = Object.fromEntries(
 );
 
 export const CHART_FORMAT = chartConfig.format;
+export const CHART_TIME_STEP = chartConfig.timeStepSeconds;
 
 const NOTE_TYPE_CODES = chartConfig.noteTypeCodes;
 
@@ -168,7 +169,7 @@ export function normalizeChart(source = {}) {
       delete key.ramp;
       return;
     }
-    const duration = Math.max(0.001, next.time - key.time);
+    const duration = Math.max(CHART_TIME_STEP, next.time - key.time);
     const estimatedBeats = duration * (key.bpm + next.bpm) / 120;
     const beats = Math.max(1, Math.round(finite(key.ramp.beats, estimatedBeats)));
     const anchors = (key.ramp.anchors ?? [])
@@ -233,7 +234,7 @@ export function normalizeChart(source = {}) {
       type,
       kind,
       hitTime,
-      ...(kind === "hold" ? { endTime: Math.max(hitTime + 0.001, finite(note.endTime, hitTime + 1)) } : {}),
+      ...(kind === "hold" ? { endTime: Math.max(hitTime + CHART_TIME_STEP, finite(note.endTime, hitTime + 1)) } : {}),
       wPos: type === "middle" ? Math.max(-1, Math.min(1, finite(note.wPos ?? note.localX, 0))) : 0
     };
   }).filter((note) => {
@@ -324,7 +325,7 @@ export function compactChart(chart) {
       difficultyLabel: normalizeDifficultyLabel(normalized.meta.difficultyLabel),
       level: normalized.meta.level,
       ...(normalized.meta.audioFile ? { audioFile: normalized.meta.audioFile } : {}),
-      ...(normalized.meta.jacket ? { jacket: normalized.meta.jacket } : {})
+      ...(normalized.meta.cover ? { cover: normalized.meta.cover } : {})
     },
     timing,
     ...(Object.keys(playfield).length ? { playfield } : {}),
@@ -793,28 +794,99 @@ export function directionAt(chart, time) {
   };
 }
 
-export function buildReceiverTrajectory(chart, sampleSeconds = 0.04, speedMultiplier = 1) {
+function motionAt(chart, time, multiplier) {
+  const orientation = directionAt(chart, time);
+  const forwardSpeed = sampleTimeline(chart.timelines.moveSpeed, time, 0) * multiplier;
+  const strafeSpeed = sampleTimeline(chart.timelines.moveStrafeSpeed, time, 0) * multiplier;
+  const velocity = orientation.direction.map((value, index) => (
+    value * forwardSpeed + orientation.right[index] * strafeSpeed
+  ));
+  return {
+    ...orientation,
+    velocity,
+    speed: Math.hypot(forwardSpeed, strafeSpeed),
+    forwardSpeed,
+    strafeSpeed
+  };
+}
+
+function vectorDistance(left, right) {
+  return Math.hypot(...left.map((value, index) => value - right[index]));
+}
+
+function directionAngle(left, right) {
+  const dot = left.reduce((sum, value, index) => sum + value * right[index], 0);
+  return Math.acos(Math.max(-1, Math.min(1, dot)));
+}
+
+function trajectorySampleTimes(chart, sampleSeconds, multiplier) {
   const duration = chart.timing.duration;
+  const baseStep = Math.max(CHART_TIME_STEP, Number(sampleSeconds) || chartConfig.trajectorySampleSeconds);
+  const seedTimes = [0, duration];
+  for (let time = baseStep; time < duration; time += baseStep) seedTimes.push(time);
+  ["moveYaw", "movePitch", "moveSpeed", "moveStrafeSpeed"].forEach((timelineId) => {
+    chart.timelines[timelineId]?.forEach((event) => {
+      if (event.time > 0 && event.time < duration) seedTimes.push(event.time);
+    });
+  });
+  seedTimes.sort((left, right) => left - right);
+  const uniqueTimes = seedTimes.filter((time, index) => index === 0 || time - seedTimes[index - 1] > 1e-9);
+  const motionCache = new Map();
+  const sampleMotion = (time) => {
+    if (!motionCache.has(time)) motionCache.set(time, motionAt(chart, time, multiplier));
+    return motionCache.get(time);
+  };
+  const maxTurn = chartConfig.trajectoryMaxTurnDegrees * Math.PI / 180;
+  const maxError = chartConfig.trajectoryMaxIntegrationError;
+  const maxDepth = chartConfig.trajectoryMaxSubdivisions;
+  const times = [uniqueTimes[0]];
+
+  const appendAdaptive = (startTime, endTime, depth) => {
+    const middleTime = (startTime + endTime) * 0.5;
+    const start = sampleMotion(startTime);
+    const middle = sampleMotion(middleTime);
+    const end = sampleMotion(endTime);
+    const turn = Math.max(
+      directionAngle(start.direction, middle.direction),
+      directionAngle(middle.direction, end.direction),
+      directionAngle(start.right, middle.right),
+      directionAngle(middle.right, end.right)
+    );
+    const linearMiddleVelocity = start.velocity.map((value, index) => (value + end.velocity[index]) * 0.5);
+    const integrationError = vectorDistance(middle.velocity, linearMiddleVelocity) * (endTime - startTime);
+    if (depth < maxDepth && endTime - startTime > CHART_TIME_STEP * 2
+      && (turn > maxTurn || integrationError > maxError)) {
+      appendAdaptive(startTime, middleTime, depth + 1);
+      appendAdaptive(middleTime, endTime, depth + 1);
+      return;
+    }
+    times.push(endTime);
+  };
+
+  for (let index = 1; index < uniqueTimes.length; index += 1) {
+    appendAdaptive(uniqueTimes[index - 1], uniqueTimes[index], 0);
+  }
+  return { times, sampleMotion };
+}
+
+export function buildReceiverTrajectory(chart, sampleSeconds = 0.04, speedMultiplier = 1) {
   const origin = chart.playfield.origin;
   const multiplier = Math.max(0.001, Number(speedMultiplier) || 1);
+  const { times, sampleMotion } = trajectorySampleTimes(chart, sampleSeconds, multiplier);
   const samples = [];
   let position = [...origin];
-  let previousTime = 0;
-  for (let time = 0; time < duration + sampleSeconds * 0.5; time += sampleSeconds) {
-    const clampedTime = Math.min(duration, time);
-    const { direction, right, yaw, pitch } = directionAt(chart, clampedTime);
-    const forwardSpeed = Math.max(0, sampleTimeline(chart.timelines.moveSpeed, clampedTime, 0)) * multiplier;
-    const strafeSpeed = sampleTimeline(chart.timelines.moveStrafeSpeed, clampedTime, 0) * multiplier;
-    const speed = Math.hypot(forwardSpeed, strafeSpeed);
-    const delta = clampedTime - previousTime;
-    if (samples.length > 0) {
-      position = position.map((value, index) => (
-        value + (direction[index] * forwardSpeed + right[index] * strafeSpeed) * delta
-      ));
+  for (let sampleIndex = 0; sampleIndex < times.length; sampleIndex += 1) {
+    const time = times[sampleIndex];
+    const { direction, right, yaw, pitch, speed, forwardSpeed, strafeSpeed } = sampleMotion(time);
+    if (sampleIndex > 0) {
+      const previousTime = times[sampleIndex - 1];
+      const middle = sampleMotion((previousTime + time) * 0.5);
+      const delta = time - previousTime;
+      position = position.map((value, index) => value + middle.velocity[index] * delta);
     }
     const sideOffset = chart.playfield.sideLaneOffset;
     samples.push({
-      time: clampedTime,
+      time,
       position: [...position],
       left: position.map((value, index) => value - right[index] * sideOffset),
       right: position.map((value, index) => value + right[index] * sideOffset),
@@ -826,8 +898,6 @@ export function buildReceiverTrajectory(chart, sampleSeconds = 0.04, speedMultip
       forwardSpeed,
       strafeSpeed
     });
-    previousTime = clampedTime;
-    if (clampedTime >= duration) break;
   }
   return samples;
 }
@@ -975,7 +1045,7 @@ export function chartForGame(chart, { flowSpeedMultiplier = 1 } = {}) {
     const sample = trajectory[index];
     receiverEvents.push({
       hitTime: previous.time,
-      moveSeconds: Math.max(0.001, sample.time - previous.time),
+      moveSeconds: Math.max(CHART_TIME_STEP, sample.time - previous.time),
       curve: "linear",
       receiverPosition: sample.position,
       judgeLineDirection: sample.lateral,

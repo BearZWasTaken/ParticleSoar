@@ -21,7 +21,7 @@ const source = {
     "song:test": {
       type: "song",
       manifest: "../charts/test/meta.json",
-      summary: { title: "Test" }
+      summary: { title: "Test", cover: "cover.webp" }
     }
   }
 };
@@ -63,6 +63,7 @@ const fakeFetch = async (url, init) => {
       format: "particlesoar-song@1",
       title: "Test",
       audio: "song.ogg",
+      cover: "cover.webp",
       charts: [{ file: "hd.json", difficultyLabel: "HD", level: 12 }]
     })
   };
@@ -86,6 +87,7 @@ assert.equal(fetchCount, 1, "song manifests should be cached");
 assert.deepEqual(lastFetchInit, { cache: "no-store" });
 assert.equal(manifestA, manifestB);
 assert.equal(manifestA.audioUrl, "https://game.test/charts/test/song.ogg");
+assert.equal(manifestA.coverUrl, "https://game.test/charts/test/cover.webp");
 assert.equal(manifestA.charts[0].url, "https://game.test/charts/test/hd.json");
 
 console.log("content catalog tests passed");

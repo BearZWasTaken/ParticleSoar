@@ -23,7 +23,7 @@ function songSummary(meta) {
     title: meta.title,
     composer: meta.composer,
     illustrator: meta.illustrator,
-    ...(meta.jacket ? { jacket: meta.jacket } : {}),
+    ...(meta.cover ? { cover: meta.cover } : {}),
     charts: meta.charts.map((chart) => ({
       file: chart.file,
       difficultyLabel: chart.difficultyLabel,
@@ -47,6 +47,7 @@ async function discoverSongs() {
     }
     if (meta.format !== "particlesoar-song@1") throw new Error(`Unsupported song manifest: ${metaPath}`);
     if (!Array.isArray(meta.charts) || meta.charts.length === 0) throw new Error(`Song has no charts: ${metaPath}`);
+    if (typeof meta.cover !== "string" || !meta.cover.trim()) throw new Error(`Song has no cover: ${metaPath}`);
     songs.push([songId(entry.name), {
       type: "song",
       manifest: `../charts/${entry.name}/meta.json`,

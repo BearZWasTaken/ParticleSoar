@@ -32,4 +32,9 @@ assert.equal(duplicateEvent?.timelineId, "moveSpeed");
 assert.equal(duplicateEvent?.duplicate.time, 2);
 assert.equal(duplicateEvent?.duplicate.value, 10);
 
+assert.equal(findDuplicateNotePlacement([
+  { type: "m", hitTime: 1.0001, wPos: 0 },
+  { type: "m", hitTime: 1.0002, wPos: 0 }
+]), null, "sub-millisecond note times should remain distinct");
+
 console.log("chart validation tests passed");

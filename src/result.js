@@ -1,4 +1,4 @@
-import { loadContentCatalog } from "./content-catalog.js?v=20260829-1";
+import { loadContentCatalog } from "./content-catalog.js?v=20260901-1";
 import { difficultyColor } from "./difficulty.js?v=20260828-4";
 import {
   RESULT_JUDGEMENTS,
@@ -7,7 +7,7 @@ import {
   parseResultSession,
   resultGrade
 } from "./result-core.js?v=20260829-2";
-import { CONFIG } from "./config.js?v=20260829-1";
+import { CONFIG } from "./config.js?v=20260901-2";
 import {
   accuracyHistogram,
   meanAbsoluteTimingError,
@@ -18,7 +18,7 @@ import {
 const refs = {
   shell: document.getElementById("result-shell"),
   error: document.getElementById("result-error"),
-  jacket: document.getElementById("result-jacket"),
+  cover: document.getElementById("result-cover"),
   title: document.getElementById("result-song-title"),
   composer: document.getElementById("result-composer"),
   charter: document.getElementById("result-charter"),
@@ -74,7 +74,6 @@ function renderAccuracy(result) {
     column.style.setProperty("--bar-height", `${count / maximum * 100}%`);
     column.style.setProperty("--accuracy-bar-color", `hsl(${hue} 84% 65%)`);
     column.setAttribute("aria-label", `${ranges[index]}: ${count}`);
-    column.title = ranges[index];
     value.textContent = String(count);
     column.append(value, bar);
     return column;
@@ -135,7 +134,7 @@ async function initialize() {
   }
 
   const catalog = await loadContentCatalog(
-    "./public/content/catalog.json?v=20260829-1",
+    "./public/content/catalog.json?v=20260901-1",
     globalThis.fetch,
     { cache: "no-store" }
   );
@@ -147,8 +146,8 @@ async function initialize() {
 
   const color = difficultyColor(chart.difficultyLabel);
   document.documentElement.style.setProperty("--difficulty-color", color);
-  refs.jacket.src = manifest.jacketUrl ?? "";
-  refs.jacket.alt = `${manifest.title} jacket`;
+  refs.cover.src = manifest.coverUrl ?? "";
+  refs.cover.alt = `${manifest.title} cover`;
   refs.title.textContent = manifest.title;
   refs.composer.textContent = manifest.composer ?? "-";
   refs.charter.textContent = chart.charter ?? "-";

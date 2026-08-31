@@ -48,7 +48,7 @@
         "title": "Particle Arts",
         "composer": "Virtual Self",
         "illustrator": "who?",
-        "jacket": "particle-arts-jacket.png",
+        "cover": "particle-arts-cover.png",
         "charts": [
           {
             "file": "ld.json",
