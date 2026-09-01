@@ -30,10 +30,13 @@ const chapter = {
 };
 profile = await store.initializeChapter(chapter);
 assert.ok(profile.progression.unlocked.includes("song:a"));
-await store.recordResult("song:a", "hd.json", { score: 900000, maxCombo: 42 });
+await store.recordResult("song:a", "hd.json", { score: 799999, maxCombo: 42 });
+profile = await store.applyChapterUnlocks(chapter);
+assert.ok(!profile.progression.unlocked.includes("song:b"));
+await store.recordResult("song:a", "hd.json", { score: 800000, maxCombo: 42 });
 profile = await store.applyChapterUnlocks(chapter);
 assert.ok(profile.progression.unlocked.includes("song:b"));
-assert.equal(profile.records["song:a"].charts["hd.json"].bestScore, 900000);
+assert.equal(profile.records["song:a"].charts["hd.json"].bestScore, 800000);
 assert.equal(profile.records["song:a"].charts["hd.json"].lastResult.maxCombo, 42);
 
 await store.recordResult("song:a", "hd.json", {

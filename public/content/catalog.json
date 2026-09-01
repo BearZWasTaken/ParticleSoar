@@ -16,6 +16,10 @@
         {
           "target": "song:particle-arts",
           "order": 0
+        },
+        {
+          "target": "song:do-re-mi-fa-so-la-ti-do",
+          "order": 1
         }
       ]
     },
@@ -37,9 +41,21 @@
           "unlock": {
             "initial": true
           }
+        },
+        {
+          "target": "song:do-re-mi-fa-so-la-ti-do",
+          "position": [
+            0.48,
+            0.24
+          ]
         }
       ],
-      "links": []
+      "links": [
+        {
+          "from": "song:particle-arts",
+          "to": "song:do-re-mi-fa-so-la-ti-do"
+        }
+      ]
     },
     "song:particle-arts": {
       "type": "song",
@@ -55,6 +71,24 @@
             "difficultyLabel": "LD",
             "level": 30,
             "charter": "first bear"
+          }
+        ]
+      }
+    },
+    "song:do-re-mi-fa-so-la-ti-do": {
+      "type": "song",
+      "manifest": "../charts/do_re_mi_fa_so_la_ti_do/meta.json",
+      "summary": {
+        "title": "do-re-mi-fa-so-la-ti-do",
+        "composer": "Porter Robinson",
+        "illustrator": "who?",
+        "cover": "cover.jpg",
+        "charts": [
+          {
+            "file": "hs.json",
+            "difficultyLabel": "HS",
+            "level": 50,
+            "charter": "second bear"
           }
         ]
       }

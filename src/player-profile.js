@@ -3,6 +3,7 @@ import { CONFIG } from "./config.js";
 export const PLAYER_PROFILE_FORMAT = "ParticleSoarPlayerProfile/v1";
 export const PLAYER_PROFILE_STORAGE_KEY = "particlesoar.player-profile.v1";
 export const LEGACY_PROGRESS_STORAGE_KEY = "particlesoar.player-progress.v1";
+export const DEFAULT_CLEAR_SCORE = 800000;
 
 export const DEFAULT_PLAYER_SETTINGS = CONFIG.player.defaultSettings;
 
@@ -113,7 +114,7 @@ function chapterInitialUnlocks(chapter) {
 
 function clearedSongIds(records) {
   return new Set(Object.entries(records)
-    .filter(([, record]) => (Number(record?.clearCount) || Number(record?.count) || 0) > 0)
+    .filter(([, record]) => (Number(record?.bestScore) || 0) >= DEFAULT_CLEAR_SCORE)
     .map(([songId]) => songId));
 }
 
@@ -169,7 +170,9 @@ export class PlayerProfileStore {
       const chartKey = chartId || "default";
       const chartRecord = songRecord.charts?.[chartKey] ?? { playCount: 0, clearCount: 0 };
       const score = Math.max(0, Math.round(Number(result.score) || 0));
-      const cleared = result.cleared !== false;
+      const cleared = typeof result.cleared === "boolean"
+        ? result.cleared
+        : score >= DEFAULT_CLEAR_SCORE;
       profile.records[songId] = {
         ...songRecord,
         playCount: (songRecord.playCount ?? songRecord.count ?? 0) + 1,

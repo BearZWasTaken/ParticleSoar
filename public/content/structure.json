@@ -16,6 +16,10 @@
         {
           "target": "song:particle-arts",
           "order": 0
+        },
+        {
+          "target": "song:do-re-mi-fa-so-la-ti-do",
+          "order": 1
         }
       ]
     },
@@ -34,9 +38,18 @@
           "unlock": {
             "initial": true
           }
+        },
+        {
+          "target": "song:do-re-mi-fa-so-la-ti-do",
+          "position": [0.48, 0.24]
         }
       ],
-      "links": []
+      "links": [
+        {
+          "from": "song:particle-arts",
+          "to": "song:do-re-mi-fa-so-la-ti-do"
+        }
+      ]
     }
   }
 }

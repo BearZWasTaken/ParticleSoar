@@ -1,6 +1,6 @@
 import { loadContentCatalog } from "./content-catalog.js?v=20260901-1";
 import { difficultyColor } from "./difficulty.js?v=20260828-4";
-import { PlayerProfileStore } from "./player-profile.js?v=20260829-1";
+import { PlayerProfileStore } from "./player-profile.js?v=20260901-1";
 import { resultGrade } from "./result-core.js?v=20260829-2";
 
 const refs = {
@@ -322,7 +322,7 @@ function setupStarfield() {
 async function initialize() {
   setupStarfield();
   catalog = await loadContentCatalog(
-    "./public/content/catalog.json?v=20260901-1",
+    "./public/content/catalog.json?v=20260901-2",
     globalThis.fetch,
     { cache: "no-store" }
   );

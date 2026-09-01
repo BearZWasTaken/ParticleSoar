@@ -134,7 +134,7 @@ async function initialize() {
   }
 
   const catalog = await loadContentCatalog(
-    "./public/content/catalog.json?v=20260901-1",
+    "./public/content/catalog.json?v=20260901-2",
     globalThis.fetch,
     { cache: "no-store" }
   );

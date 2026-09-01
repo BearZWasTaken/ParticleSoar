@@ -93,7 +93,7 @@ import { loadContentCatalog } from "./src/content-catalog.js?v=20260901-1";
 import {
   DEFAULT_PLAYER_SETTINGS,
   PlayerProfileStore
-} from "./src/player-profile.js?v=20260829-1";
+} from "./src/player-profile.js?v=20260901-1";
 import { createInputMap } from "./src/input-map.js?v=20260829-1";
 import { HitSoundPlayer } from "./src/hit-sounds.js?v=20260829-2";
 import {
@@ -2015,7 +2015,7 @@ async function loadSelectedSong() {
   const songId = launchParameters.get("song");
   if (!songId || editorPreviewMode) return false;
   const catalog = await loadContentCatalog(
-    "./public/content/catalog.json?v=20260901-1",
+    "./public/content/catalog.json?v=20260901-2",
     globalThis.fetch,
     { cache: "no-store" }
   );

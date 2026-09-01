@@ -4,11 +4,12 @@
   "composer": "Porter Robinson",
   "illustrator": "who?",
   "audio": "Porter Robinson - do-re-mi-fa-so-la-ti-do (Cut).mp3",
+  "cover": "cover.jpg",
   "charts": [
     {
       "file": "hs.json",
-      "difficultyLabel": "LD",
-      "level": 30,
+      "difficultyLabel": "HS",
+      "level": 50,
       "charter": "second bear"
     }
   ]

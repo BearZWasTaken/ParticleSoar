@@ -4,7 +4,7 @@ import { createInputMap } from "./input-map.js?v=20260829-1";
 import {
   DEFAULT_PLAYER_SETTINGS,
   PlayerProfileStore
-} from "./player-profile.js?v=20260829-1";
+} from "./player-profile.js?v=20260901-1";
 import { bindRangeControl, setRangeValue } from "./ui-components.js?v=20260829-1";
 
 const CALIBRATION_BPM = 128;
