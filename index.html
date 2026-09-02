@@ -95,6 +95,10 @@ import {
   PlayerProfileStore
 } from "./src/player-profile.js?v=20260901-1";
 import { createInputMap } from "./src/input-map.js?v=20260829-1";
+import {
+  JUDGEMENT_QUALITY_ORDER,
+  selectBestJudgementCandidate
+} from "./src/judgement-selection.js?v=20260903-1";
 import { HitSoundPlayer } from "./src/hit-sounds.js?v=20260829-2";
 import {
   accuracyTickPositions,
@@ -2687,8 +2691,6 @@ if (editorPreviewMode) {
 const inputMap = createInputMap(gameConfig.input);
 const gameplayKeyCodes = inputMap.keyCodes;
 
-const judgementOrder = ["flawless", "prime", "decent", "loose"];
-
 function normalizeChartTime(chartTime) {
   const duration = timingConfig.chartDuration;
   if (activeLaunch) return THREE.MathUtils.clamp(chartTime, 0, duration);
@@ -2763,7 +2765,7 @@ function showAccuracyHit(offsetSeconds) {
 function judgementForGap(timeGap) {
   const gap = Math.abs(timeGap);
   const windows = currentJudgementWindows();
-  for (const judgement of judgementOrder) {
+  for (const judgement of JUDGEMENT_QUALITY_ORDER) {
     if (gap <= windows[judgement]) return judgement;
   }
   return "hollow";
@@ -3016,15 +3018,15 @@ function attachKeyToActiveHolds(inputType, code, judgeChartTime) {
   });
 }
 
-function tryJudgeInputType(inputType, code, judgeChartTime) {
+function judgementCandidateForInputType(inputType, judgeChartTime) {
   const queue = gameplayState.noteQueues.get(inputType);
-  if (!queue) return false;
+  if (!queue) return null;
   advanceJudgementCursor(queue);
-  if (queue.cursor >= queue.notes.length) return false;
+  if (queue.cursor >= queue.notes.length) return null;
 
   let candidate = queue.notes[queue.cursor];
   let judgement = judgementForGap(candidate.hitTime - judgeChartTime);
-  if (candidate.hitTime > judgeChartTime && judgement === "hollow") return false;
+  if (candidate.hitTime > judgeChartTime && judgement === "hollow") return null;
 
   if (candidate.hitTime < judgeChartTime && judgement === "decent") {
     for (let i = queue.cursor + 1; i < queue.notes.length; i += 1) {
@@ -3040,11 +3042,16 @@ function tryJudgeInputType(inputType, code, judgeChartTime) {
     }
   }
 
-  if (judgement === "hollow") return false;
-  if (isHoldNote(candidate)) {
-    beginHold(candidate, judgement, judgeChartTime, code);
+  if (judgement === "hollow") return null;
+  return { inputType, note: candidate, judgement };
+}
+
+function applyJudgementCandidate(candidate, code, judgeChartTime) {
+  if (!candidate) return false;
+  if (isHoldNote(candidate.note)) {
+    beginHold(candidate.note, candidate.judgement, judgeChartTime, code);
   } else {
-    finalizeNote(candidate, judgement, judgeChartTime);
+    finalizeNote(candidate.note, candidate.judgement, judgeChartTime);
   }
   return true;
 }
@@ -3159,9 +3166,12 @@ window.addEventListener("keydown", (event) => {
     attachKeyToActiveHolds(inputType, event.code, judgeChartTime);
   });
   updateJudgementState(judgeChartTime);
-  for (const inputType of inputTypes) {
-    if (tryJudgeInputType(inputType, event.code, judgeChartTime)) break;
-  }
+  const candidate = selectBestJudgementCandidate(
+    inputTypes
+      .map((inputType) => judgementCandidateForInputType(inputType, judgeChartTime))
+      .filter(Boolean)
+  );
+  applyJudgementCandidate(candidate, event.code, judgeChartTime);
 });
 
 window.addEventListener("keyup", (event) => {

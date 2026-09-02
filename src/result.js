@@ -117,7 +117,7 @@ function setupStarfield() {
 
 function navigateToGame(session) {
   const target = new URL("./index.html", window.location.href);
-  target.searchParams.set("v", "20260829-11");
+  target.searchParams.set("v", "20260903-1");
   target.searchParams.set("song", session.songId);
   target.searchParams.set("chart", session.chart);
   if (session.chapterId) target.searchParams.set("chapter", session.chapterId);

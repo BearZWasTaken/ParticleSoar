@@ -174,7 +174,7 @@ async function launchSong(song, chartSummary) {
   const chart = manifest.charts.find((entry) => entry.file === chartSummary.file);
   if (!chart) throw new Error(`Difficulty chart not found: ${chartSummary.file}`);
   const target = new URL("./index.html", window.location.href);
-  target.searchParams.set("v", "20260829-11");
+  target.searchParams.set("v", "20260903-1");
   target.searchParams.set("song", song.id);
   target.searchParams.set("chart", chart.file);
   target.searchParams.set("chapter", chapter.id);
