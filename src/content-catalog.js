@@ -176,7 +176,11 @@ export class ContentCatalog {
       coverUrl: resolveOptionalUrl(cover, manifestUrl),
       charts: manifest.charts.map((chart) => ({
         ...chart,
-        url: new URL(nonEmptyString(chart.file, `${song.id}.charts.file`), manifestUrl).href
+        url: new URL(nonEmptyString(chart.file, `${song.id}.charts.file`), manifestUrl).href,
+        effectModules: (chart.effectModules ?? []).map((module) => ({
+          ...module,
+          url: new URL(nonEmptyString(module.file, `${song.id}.charts.effectModules.file`), manifestUrl).href
+        }))
       }))
     };
   }

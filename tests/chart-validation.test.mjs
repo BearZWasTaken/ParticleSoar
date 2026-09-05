@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import {
   createDefaultChart,
   chartForGame,
+  compactChart,
   findDuplicateNotePlacement,
   findDuplicateTimelineEvent,
   normalizeChart
@@ -39,5 +40,22 @@ assert.equal(findDuplicateNotePlacement([
   { type: "m", hitTime: 1.0001, wPos: 0 },
   { type: "m", hitTime: 1.0002, wPos: 0 }
 ]), null, "sub-millisecond note times should remain distinct");
+
+const effectChart = createDefaultChart();
+effectChart.fx = [{
+  id: "editor-only",
+  time: 1.25,
+  target: "planet",
+  action: "pulse",
+  params: { strength: 2 }
+}];
+const compactEffectChart = compactChart(effectChart);
+assert.deepEqual(compactEffectChart.fx, [{
+  time: 1.25,
+  target: "planet",
+  action: "pulse",
+  params: { strength: 2 }
+}]);
+assert.ok(normalizeChart(compactEffectChart).fx[0].id, "editor ids should be restored when loading");
 
 console.log("chart validation tests passed");

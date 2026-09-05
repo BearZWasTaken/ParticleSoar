@@ -64,7 +64,12 @@ const fakeFetch = async (url, init) => {
       title: "Test",
       audio: "song.ogg",
       cover: "cover.webp",
-      charts: [{ file: "hd.json", difficultyLabel: "HD", level: 12 }]
+      charts: [{
+        file: "hd.json",
+        difficultyLabel: "HD",
+        level: 12,
+        effectModules: [{ id: "planet", file: "effects/planet.effect.js", order: 10 }]
+      }]
     })
   };
 };
@@ -89,5 +94,6 @@ assert.equal(manifestA, manifestB);
 assert.equal(manifestA.audioUrl, "https://game.test/charts/test/song.ogg");
 assert.equal(manifestA.coverUrl, "https://game.test/charts/test/cover.webp");
 assert.equal(manifestA.charts[0].url, "https://game.test/charts/test/hd.json");
+assert.equal(manifestA.charts[0].effectModules[0].url, "https://game.test/charts/test/effects/planet.effect.js");
 
 console.log("content catalog tests passed");

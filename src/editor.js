@@ -26,7 +26,7 @@ import {
   timeAtBeat,
   trajectoryPoseAt,
   receiverFrameAt
-} from "./chart-core.js?v=20260901-7";
+} from "./chart-core.js?v=20260905-1";
 import { CONFIG } from "./config.js?v=20260901-3";
 import { HitSoundPlayer } from "./hit-sounds.js?v=20260831-1";
 import { createProjectZip, projectJson, readProjectZip } from "./project-package.js?v=20260828-66";
@@ -108,6 +108,7 @@ const refs = {
   formulaRow: $("#formula-row"),
   bpmList: $("#bpm-key-list"),
   effectList: $("#effect-list"),
+  effectModuleSummary: $("#effect-module-summary"),
   audio: $("#audio-player"),
   chartFile: $("#chart-file-input"),
   projectPackage: $("#project-package-input"),
@@ -160,6 +161,8 @@ const state = {
   projectMeta: null,
   projectChartFile: null,
   projectCharts: new Map(),
+  effectProjectFiles: new Map(),
+  effectProjectUrls: new Map(),
   audioSourceFile: null,
   coverSourceFile: null,
   coverUrl: null
@@ -423,6 +426,7 @@ function syncGamePreviewChart() {
   refs.gamePreview.contentWindow.postMessage({
     type: "ParticleSoarPreviewChart",
     chart: previewChart,
+    effectModules: currentEffectModules(),
     time: state.currentTime
   }, window.location.origin);
 }
@@ -1919,10 +1923,20 @@ function renderBpmKeys(syncEditor = true) {
 
 function renderEffects() {
   refs.effectList.replaceChildren();
-  state.chart.effects.forEach((effect) => {
+  const modules = currentEffectModules();
+  refs.effectModuleSummary.textContent = modules.length
+    ? `模块：${modules.map((module) => module.id).join(" · ")}`
+    : "当前难度未引用特效模块";
+  state.chart.fx.forEach((effect) => {
     const item = document.createElement("div");
     item.className = "effect-item";
-    item.innerHTML = `<strong>${effect.type}</strong><span>${formatTime(effect.time)}</span><code>${JSON.stringify(effect.position)} · ${JSON.stringify(effect.params)}</code>`;
+    item.dataset.effectId = effect.id;
+    item.innerHTML = `
+      <label>时间<input data-effect-field="time" type="number" min="0" step="0.0001" value="${effect.time.toFixed(4)}"></label>
+      <button data-effect-delete type="button" aria-label="删除特效关键帧">×</button>
+      <label>模块<input data-effect-field="target" value="${escapeHtml(effect.target)}"></label>
+      <label>动作<input data-effect-field="action" value="${escapeHtml(effect.action)}"></label>
+      <label class="effect-params">参数 JSON<textarea data-effect-field="params" rows="2">${escapeHtml(JSON.stringify(effect.params))}</textarea></label>`;
     refs.effectList.appendChild(item);
   });
 }
@@ -2261,6 +2275,28 @@ function safeFileName(value, fallback) {
   return safe || fallback;
 }
 
+function escapeHtml(value) {
+  return String(value ?? "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
+}
+
+function currentDifficultyEntry() {
+  return state.projectMeta?.charts?.find((entry) => entry.file === state.projectChartFile) ?? null;
+}
+
+function currentEffectModules() {
+  const resourceUrls = Object.fromEntries(state.effectProjectUrls);
+  return (currentDifficultyEntry()?.effectModules ?? []).map((module) => ({
+    ...structuredClone(module),
+    ...(state.effectProjectUrls.has(module.file) ? { url: state.effectProjectUrls.get(module.file) } : {}),
+    ...(state.effectProjectUrls.size ? { resourceUrls } : {})
+  }));
+}
+
 function chartFileName() {
   if (state.projectChartFile) return state.projectChartFile;
   const label = safeFileName(state.chart.meta.difficultyLabel.toLowerCase(), `chart-${state.chart.meta.level}`);
@@ -2278,12 +2314,16 @@ function uniqueChartFileName(label, level) {
   return name;
 }
 
-function difficultyEntry(file, chart) {
+function difficultyEntry(file, chart, effectModules = null) {
+  const modules = effectModules
+    ?? state.projectMeta?.charts?.find((entry) => entry.file === file)?.effectModules
+    ?? [];
   return {
     file,
     difficultyLabel: chart.meta.difficultyLabel,
     level: chart.meta.level,
-    charter: chart.meta.charter
+    charter: chart.meta.charter,
+    ...(modules.length ? { effectModules: structuredClone(modules) } : {})
   };
 }
 
@@ -2363,7 +2403,7 @@ function blankDifficultyChart() {
   blank.timing.bpmKeys = structuredClone(current.timing.bpmKeys);
   blank.playfield = structuredClone(current.playfield);
   blank.notes = [];
-  blank.effects = [];
+  blank.fx = [];
   return normalizeChart(blank);
 }
 
@@ -2399,16 +2439,83 @@ async function writableProjectDirectory() {
   return state.projectDirectory;
 }
 
+function projectPathSegments(name) {
+  const segments = String(name ?? "").replaceAll("\\", "/").split("/").filter(Boolean);
+  if (!segments.length || segments.some((segment) => segment === "." || segment === "..")) {
+    throw new Error(`无效工程路径：${name}`);
+  }
+  return segments;
+}
+
+async function projectFileHandle(directory, name, { create = false } = {}) {
+  const segments = projectPathSegments(name);
+  let parent = directory;
+  for (const segment of segments.slice(0, -1)) {
+    parent = await parent.getDirectoryHandle(segment, { create });
+  }
+  return parent.getFileHandle(segments.at(-1), { create });
+}
+
+async function readProjectFile(directory, name) {
+  return (await projectFileHandle(directory, name)).getFile();
+}
+
 async function readProjectJson(directory, name) {
-  const handle = await directory.getFileHandle(name);
-  return JSON.parse(await (await handle.getFile()).text());
+  return JSON.parse(await (await readProjectFile(directory, name)).text());
 }
 
 async function writeProjectFile(directory, name, contents) {
-  const handle = await directory.getFileHandle(safeFileName(name, "file"), { create: true });
+  const handle = await projectFileHandle(directory, name, { create: true });
   const writable = await handle.createWritable();
   await writable.write(contents);
   await writable.close();
+}
+
+function replaceEffectProjectFiles(files = new Map()) {
+  state.effectProjectUrls.forEach((url) => URL.revokeObjectURL(url));
+  state.effectProjectFiles = files;
+  state.effectProjectUrls = new Map([...files].map(([name, contents]) => {
+    const blob = contents instanceof Blob
+      ? contents
+      : new Blob([contents], { type: fileMimeType(name) });
+    return [name, URL.createObjectURL(blob)];
+  }));
+}
+
+async function collectDirectoryEffectFiles(directory, meta) {
+  const files = new Map();
+  const modulePaths = (meta.charts ?? []).flatMap((chart) => (
+    (chart.effectModules ?? []).map((module) => projectPathSegments(module.file))
+  ));
+  const roots = new Set(modulePaths.filter((segments) => segments.length > 1).map((segments) => segments[0]));
+  const visit = async (handle, prefix) => {
+    for await (const [name, child] of handle.entries()) {
+      const path = `${prefix}/${name}`;
+      if (child.kind === "directory") await visit(child, path);
+      else files.set(path, await child.getFile());
+    }
+  };
+  for (const root of roots) {
+    const handle = await directory.getDirectoryHandle(root);
+    await visit(handle, root);
+  }
+  for (const segments of modulePaths.filter((path) => path.length === 1)) {
+    const name = segments[0];
+    files.set(name, await readProjectFile(directory, name));
+  }
+  return files;
+}
+
+function collectPackageEffectFiles(files, meta) {
+  const modulePaths = (meta.charts ?? []).flatMap((chart) => (
+    (chart.effectModules ?? []).map((module) => projectPathSegments(module.file))
+  ));
+  const roots = new Set(modulePaths.map((segments) => (
+    segments.length > 1 ? `${segments[0]}/` : segments[0]
+  )));
+  return new Map([...files].filter(([name]) => (
+    [...roots].some((root) => root.endsWith("/") ? name.startsWith(root) : name === root)
+  )));
 }
 
 async function materializeProjectEntries(entries) {
@@ -2462,6 +2569,7 @@ async function collectProjectEntries() {
   return [
     { name: "meta.json", contents: JSON.stringify(state.projectMeta, null, 2) },
     ...[...state.projectCharts].map(([name, chart]) => ({ name, contents: JSON.stringify(compactChart(chart)) })),
+    ...[...state.effectProjectFiles].map(([name, contents]) => ({ name, contents })),
     ...(state.audioSourceFile ? [{ name: state.chart.meta.audioFile, contents: state.audioSourceFile }] : []),
     ...(state.coverSourceFile ? [{ name: state.chart.meta.cover, contents: state.coverSourceFile }] : [])
   ];
@@ -2508,6 +2616,7 @@ function clearProjectResources() {
   state.coverUrl = null;
   state.audioSourceFile = null;
   state.coverSourceFile = null;
+  replaceEffectProjectFiles();
   state.waveformPeaks = null;
   state.waveformPitch = null;
   refs.audio.pause();
@@ -2554,10 +2663,12 @@ async function openProject() {
     for (const chartEntry of charts) {
       loadedCharts.set(chartEntry.file, normalizeChart(await readProjectJson(directory, chartEntry.file)));
     }
+    const effectFiles = await collectDirectoryEffectFiles(directory, meta);
     clearProjectResources();
     state.projectDirectory = directory;
     state.projectMeta = meta;
     state.projectCharts = loadedCharts;
+    replaceEffectProjectFiles(effectFiles);
     refs.projectLocation.textContent = directory.name;
     activateDifficulty(entry.file, null, false);
     if (meta.audio) {
@@ -2587,7 +2698,12 @@ function fileMimeType(name) {
     png: "image/png",
     jpg: "image/jpeg",
     jpeg: "image/jpeg",
-    webp: "image/webp"
+    webp: "image/webp",
+    js: "text/javascript",
+    mjs: "text/javascript",
+    json: "application/json",
+    glb: "model/gltf-binary",
+    gltf: "model/gltf+json"
   })[extension] ?? "application/octet-stream";
 }
 
@@ -2600,9 +2716,11 @@ async function loadProjectPackage(file) {
     if (!charts.length) throw new Error("meta.json 中没有难度谱面");
     const entry = charts.find((item) => item.difficultyLabel === state.chart.meta.difficultyLabel) ?? charts[0];
     const loadedCharts = new Map(charts.map((chartEntry) => [chartEntry.file, normalizeChart(projectJson(files, chartEntry.file))]));
+    const effectFiles = collectPackageEffectFiles(files, meta);
     clearProjectContext();
     state.projectMeta = meta;
     state.projectCharts = loadedCharts;
+    replaceEffectProjectFiles(effectFiles);
     refs.projectLocation.textContent = `${file.name} · PACKAGE`;
     activateDifficulty(entry.file, null, false);
     if (meta.audio && files.has(meta.audio)) {
@@ -2657,6 +2775,7 @@ function createDifficultyFromDialog() {
     setStatus(`难度 ${label} 已存在`);
     return false;
   }
+  const inheritedEffectModules = structuredClone(currentDifficultyEntry()?.effectModules ?? []);
   cacheCurrentDifficulty();
   const source = refs.difficultyForm.querySelector("input[name='difficulty-source']:checked")?.value;
   const chart = source === "copy" ? normalizeChart(structuredClone(state.chart)) : blankDifficultyChart();
@@ -2665,7 +2784,7 @@ function createDifficultyFromDialog() {
   chart.meta.charter = charter;
   const file = uniqueChartFileName(label, level);
   state.projectCharts.set(file, chart);
-  state.projectMeta.charts.push(difficultyEntry(file, chart));
+  state.projectMeta.charts.push(difficultyEntry(file, chart, source === "copy" ? inheritedEffectModules : []));
   activateDifficulty(file, `已创建难度 ${label} ${level}`, true);
   setDirty(true);
   return true;
@@ -3144,8 +3263,43 @@ document.addEventListener("focusout", (event) => {
 });
 
 $("#add-effect").addEventListener("click", () => {
-  const effect = { id: crypto.randomUUID(), time: state.currentTime, type: "planet", position: [0, 0, 0], params: { radius: 30, color: "#9fc8ff" } };
-  commitChange(() => state.chart.effects.push(effect), "已添加自定义特效事件");
+  const target = currentEffectModules()[0]?.id ?? "environment";
+  const effect = { id: crypto.randomUUID(), time: state.currentTime, target, action: "trigger", params: {} };
+  commitChange(() => state.chart.fx.push(effect), "已添加特效关键帧");
+});
+
+refs.effectList.addEventListener("click", (event) => {
+  const button = event.target.closest("[data-effect-delete]");
+  if (!button) return;
+  const id = button.closest(".effect-item")?.dataset.effectId;
+  commitChange(() => {
+    state.chart.fx = state.chart.fx.filter((effect) => effect.id !== id);
+  }, "已删除特效关键帧");
+});
+
+refs.effectList.addEventListener("change", (event) => {
+  const control = event.target.closest("[data-effect-field]");
+  const item = control?.closest(".effect-item");
+  const effect = state.chart.fx.find((candidate) => candidate.id === item?.dataset.effectId);
+  if (!control || !effect) return;
+  const field = control.dataset.effectField;
+  let value = control.value;
+  if (field === "time") value = Math.max(0, Math.min(state.chart.timing.duration, Number(value) || 0));
+  if (field === "params") {
+    try {
+      value = JSON.parse(value || "{}");
+      if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("参数必须是 JSON 对象");
+      control.setCustomValidity("");
+    } catch (error) {
+      control.setCustomValidity(error.message);
+      control.reportValidity();
+      return;
+    }
+  }
+  commitChange(() => {
+    const target = state.chart.fx.find((candidate) => candidate.id === effect.id);
+    if (target) target[field] = value;
+  }, "已更新特效关键帧");
 });
 
 refs.scrubber.addEventListener("input", () => {

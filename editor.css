@@ -1035,6 +1035,42 @@ label {
   white-space: nowrap;
 }
 
+.effect-item {
+  grid-template-columns: minmax(0, 1fr) 28px;
+  cursor: default;
+}
+
+.effect-item label {
+  display: grid;
+  grid-template-columns: 38px minmax(0, 1fr);
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.effect-item label:nth-of-type(2),
+.effect-item label:nth-of-type(3),
+.effect-item .effect-params {
+  grid-column: 1 / -1;
+}
+
+.effect-item input,
+.effect-item textarea {
+  width: 100%;
+  min-width: 0;
+}
+
+.effect-item textarea {
+  resize: vertical;
+  font: 10px/1.4 ui-monospace, SFMono-Regular, Consolas, monospace;
+}
+
+.effect-item [data-effect-delete] {
+  min-height: 26px;
+  padding: 0;
+}
+
 .statusbar {
   display: flex;
   padding: 4px 10px;

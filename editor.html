@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>ParticleSoar Chart Editor</title>
-  <link rel="stylesheet" href="./editor.css?v=20260831-2">
+  <link rel="stylesheet" href="./editor.css?v=20260905-1">
   <script type="importmap">
   {
     "imports": {
@@ -18,7 +18,7 @@
   <div class="editor-shell editor-panel-collapsed">
     <section class="preview-stage" aria-label="3D trajectory preview">
       <canvas id="preview-canvas" hidden></canvas>
-      <iframe id="game-preview" src="./index.html?editorPreview=1&v=20260828-66" aria-label="游玩场景预览"></iframe>
+      <iframe id="game-preview" src="./index.html?editorPreview=1&v=20260905-3" aria-label="游玩场景预览"></iframe>
       <div class="preview-state">
         <span id="dirty-state">已保存</span>
         <button id="view-toggle" type="button" aria-label="切换自由或游玩视角"><strong id="view-mode">FREE</strong></button>
@@ -204,8 +204,8 @@
           </div>
         </section>
         <section class="effect-section">
-          <div class="section-heading"><strong>谱面特效接口</strong><button id="add-effect" type="button">添加</button></div>
-          <p>特效保存为时间、类型、坐标与参数；渲染器可按谱面扩展。</p>
+          <div class="section-heading"><strong>特效关键帧</strong><button id="add-effect" type="button">在此添加</button></div>
+          <p id="effect-module-summary">当前难度未引用特效模块</p>
           <div id="effect-list"></div>
         </section>
       </aside>
@@ -247,6 +247,6 @@
   <input id="cover-file-input" type="file" accept="image/*" hidden>
   <audio id="audio-player" preload="auto"></audio>
 
-  <script type="module" src="./src/editor.js?v=20260901-8"></script>
+  <script type="module" src="./src/editor.js?v=20260905-1"></script>
 </body>
 </html>

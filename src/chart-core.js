@@ -63,7 +63,7 @@ export function createDefaultChart() {
     playfield: structuredClone(chartDefaults.playfield),
     timelines: timelineEvents,
     notes: chartDefaults.notes.map((note) => ({ id: crypto.randomUUID(), ...note })),
-    effects: []
+    fx: []
   };
 }
 
@@ -243,7 +243,27 @@ export function normalizeChart(source = {}) {
     seenNotePlacements.add(key);
     return true;
   }).sort((a, b) => a.hitTime - b.hitTime || (a.wPos ?? 0) - (b.wPos ?? 0));
-  chart.effects = Array.isArray(chart.effects) ? chart.effects : [];
+  const sourceCues = Array.isArray(chart.fx)
+    ? chart.fx
+    : Array.isArray(chart.effects)
+      ? chart.effects.map((effect) => ({
+        time: effect.time,
+        target: effect.target ?? effect.type,
+        action: effect.action ?? effect.type,
+        params: effect.params ?? {}
+      }))
+      : [];
+  chart.fx = sourceCues.map((cue) => ({
+    id: cue.id ?? crypto.randomUUID(),
+    time: Math.max(0, finite(cue.time, 0)),
+    target: String(cue.target ?? "").trim(),
+    action: String(cue.action ?? "").trim(),
+    params: cue.params && typeof cue.params === "object" && !Array.isArray(cue.params)
+      ? cue.params
+      : {}
+  })).filter((cue) => cue.target && cue.action)
+    .sort((left, right) => left.time - right.time);
+  delete chart.effects;
   return chart;
 }
 
@@ -313,7 +333,10 @@ export function compactChart(chart) {
       ? { origin: normalized.playfield.origin }
       : {})
   };
-  const effects = normalized.effects.map(({ id, ...effect }) => effect);
+  const fx = normalized.fx.map(({ id, params, ...cue }) => ({
+    ...cue,
+    ...(params && Object.keys(params).length ? { params } : {})
+  }));
 
   return {
     format: CHART_FORMAT,
@@ -333,7 +356,7 @@ export function compactChart(chart) {
       TIMELINE_DEFINITIONS.map(({ id }) => [id, compactTimeline(normalized.timelines[id])])
     ),
     notes: normalized.notes.map(compactNote),
-    ...(effects.length ? { effects } : {})
+    ...(fx.length ? { fx } : {})
   };
 }
 

@@ -87,9 +87,9 @@ import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js"
 import { Line2 } from "three/addons/lines/Line2.js";
 import { LineGeometry } from "three/addons/lines/LineGeometry.js";
 import { LineMaterial } from "three/addons/lines/LineMaterial.js";
-import { CHART_FORMAT, chartForGame } from "./src/chart-core.js?v=20260901-7";
+import { CHART_FORMAT, chartForGame } from "./src/chart-core.js?v=20260905-1";
 import { CONFIG } from "./src/config.js?v=20260901-3";
-import { loadContentCatalog } from "./src/content-catalog.js?v=20260901-1";
+import { loadContentCatalog } from "./src/content-catalog.js?v=20260905-1";
 import {
   DEFAULT_PLAYER_SETTINGS,
   PlayerProfileStore
@@ -104,6 +104,7 @@ import {
   accuracyTickPositions,
   timingWindowsMilliseconds
 } from "./src/accuracy-core.js?v=20260829-1";
+import { ChartEffectRuntime } from "./src/effects/effect-runtime.js?v=20260905-3";
 
 const gameConfig = CONFIG.game;
 const colorConfig = CONFIG.colors;
@@ -280,6 +281,7 @@ composer.addPass(bloom);
 
 const notesRoot = new THREE.Group();
 const particlesRoot = new THREE.Group();
+const chartEffectsRoot = new THREE.Group();
 const editorRouteRoot = new THREE.Group();
 editorRouteRoot.visible = false;
 const editorCameraGuideRoot = new THREE.Group();
@@ -317,7 +319,7 @@ editorCameraDirection.traverse((object) => {
   }
 });
 editorCameraGuideRoot.add(editorCameraHelper, editorCameraMarker, editorCameraDirection);
-scene.add(notesRoot, particlesRoot, editorRouteRoot, editorCameraGuideRoot);
+scene.add(notesRoot, particlesRoot, chartEffectsRoot, editorRouteRoot, editorCameraGuideRoot);
 const editorRouteMaterials = new Set();
 const editorRouteBounds = new THREE.Sphere(new THREE.Vector3(), 1);
 let editorPreviewView = "play";
@@ -413,6 +415,21 @@ function makeForegroundGlowMaterial(color, opacity = 1, intensity = 1) {
 
 function makeNoteGlowMaterial(color, opacity = 1, intensity = 1) {
   return makeForegroundGlowMaterial(color, opacity, intensity * gameConfig.rendering.noteGlowIntensity);
+}
+
+function makeHoldParticleMaterial(color) {
+  const material = makeNoteGlowMaterial(color, 0.58, 1.88);
+  material.opacity = 1;
+  const compileForegroundFog = material.onBeforeCompile;
+  material.onBeforeCompile = (shader) => {
+    compileForegroundFog(shader);
+    shader.vertexShader = `attribute float holdAlpha;\nvarying float vHoldAlpha;\n${shader.vertexShader}`
+      .replace("void main() {", "void main() {\n  vHoldAlpha = holdAlpha;");
+    shader.fragmentShader = `varying float vHoldAlpha;\n${shader.fragmentShader}`
+      .replace("#include <color_fragment>", "#include <color_fragment>\n  diffuseColor.a *= vHoldAlpha;");
+  };
+  material.customProgramCacheKey = () => "hold-particle-instanced-v1";
+  return material;
 }
 
 function makeNoteBodyMaterial(color, opacity = 1, intensity = 1) {
@@ -816,6 +833,7 @@ const holdRenderDelta = new THREE.Vector3();
 const holdRenderDirection = new THREE.Vector3();
 const holdRenderAxisA = new THREE.Vector3();
 const holdRenderAxisB = new THREE.Vector3();
+const holdParticleTransform = new THREE.Object3D();
 
 const timingConfig = { ...gameConfig.timing };
 const playfieldConfig = { ...gameConfig.playfield };
@@ -858,6 +876,15 @@ const receiverState = {
 };
 
 const clock = new THREE.Clock();
+const chartEffectRuntime = new ChartEffectRuntime({
+  THREE,
+  root: chartEffectsRoot,
+  scene,
+  camera,
+  renderer,
+  composer,
+  getReceiverPose: (time) => sampleReceiverPose(time)
+});
 
 function getLandingHintTransform(note) {
   if (chartState.motionMode === "receiver-catch") {
@@ -1001,17 +1028,18 @@ function curveValue(event, localTime) {
 
 function evaluateTimeline(timeline, chartTime) {
   if (!timeline) return 0;
-  let previous = null;
-  let next = null;
-  for (const event of timeline.events) {
-    if (event.startTime <= chartTime && chartTime < event.endTime) {
-      return curveValue(event, chartTime - event.startTime);
-    }
-    if (event.startTime <= chartTime) previous = event;
-    if (event.startTime > chartTime) {
-      next = event;
-      break;
-    }
+  const events = timeline.events;
+  let low = 0;
+  let high = events.length;
+  while (low < high) {
+    const middle = (low + high) >> 1;
+    if (events[middle].startTime <= chartTime) low = middle + 1;
+    else high = middle;
+  }
+  const previous = events[low - 1] ?? null;
+  const next = events[low] ?? null;
+  if (previous && chartTime < previous.endTime) {
+    return curveValue(previous, chartTime - previous.startTime);
   }
   if (previous) return curveValue(previous, previous.endTime - previous.startTime);
   if (next) return curveValue(next, 0);
@@ -1361,13 +1389,9 @@ function createHoldNoteMesh(kind = "middle", particleLayout = []) {
       ? createTopNoteMesh()
       : createNoteMesh(kind);
   const bodyParticles = particleLayout.map((placement, index) => {
-    const triangle = new THREE.Mesh(
-      holdTriangleGeo,
-      makeNoteGlowMaterial(color, 0.58, 1.88)
-    );
     const radial = Math.sqrt(((index * 0.61803398875) % 1));
     const angle = ((index * 2.39996322973) + Math.sin(index * 5.17) * 0.45) % (Math.PI * 2);
-    triangle.userData = {
+    return { userData: {
       baseOpacity: 0.48 + (index % 4) * 0.055,
       radial,
       angle,
@@ -1376,12 +1400,20 @@ function createHoldNoteMesh(kind = "middle", particleLayout = []) {
       scale: 0.22 + (index % 6) * 0.032,
       spin: (index % 2 === 0 ? 1 : -1) * (0.12 + (index % 9) * 0.019),
       orbitSpeed: 0.85 + (index % 11) * 0.055
-    };
-    return triangle;
+    } };
   });
+  const bodyGeometry = holdTriangleGeo.clone();
+  const holdAlpha = new THREE.InstancedBufferAttribute(new Float32Array(bodyParticles.length), 1);
+  holdAlpha.setUsage(THREE.DynamicDrawUsage);
+  bodyGeometry.setAttribute("holdAlpha", holdAlpha);
+  const bodyMesh = new THREE.InstancedMesh(bodyGeometry, makeHoldParticleMaterial(color), bodyParticles.length);
+  bodyMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+  bodyMesh.frustumCulled = false;
+  bodyMesh.userData.ownedGeometry = true;
   notesRoot.remove(head);
-  group.add(...bodyParticles, head);
+  group.add(bodyMesh, head);
   group.userData.bodyParticles = bodyParticles;
+  group.userData.bodyMesh = bodyMesh;
   group.userData.head = head;
   group.userData.holdRadiusScale = head.userData.baseScale * 1.8;
   group.userData.baseScale = 1;
@@ -1691,6 +1723,7 @@ function clearNotes() {
     notesRoot.remove(note.mesh);
     note.mesh.traverse((object) => {
       object.material?.dispose?.();
+      if (object.userData.ownedGeometry) object.geometry?.dispose?.();
     });
   });
   notes.length = 0;
@@ -1834,10 +1867,12 @@ function applyChartMetadata(chart) {
   difficultyBadge.setAttribute("aria-label", `Chart difficulty: ${difficultyName} ${difficultyLevel}`);
 }
 
-function loadChart(chart) {
-  if (chart?.format === CHART_FORMAT) {
+function loadChart(chart, effectModules = chart?.effectModules ?? []) {
+  const effectChart = chart?.format === CHART_FORMAT ? chart : null;
+  if (effectChart) {
     chart = chartForGame(chart, { flowSpeedMultiplier: runtimeSettings.flowSpeedMultiplier });
   }
+  const effectReady = chartEffectRuntime.configure({ chart: effectChart, modules: effectModules });
   chartState.startTime = clock?.getElapsedTime?.() ?? 0;
   chartState.chartTime = 0;
   cameraMount.configured = false;
@@ -1859,6 +1894,7 @@ function loadChart(chart) {
   chartState.constellationEdges = buildConstellationEdges(notes);
   resetGameplayState();
   rebuildBackgroundField();
+  return effectReady;
 }
 
 function showLaunchOverlay(kicker, title, buttonLabel, action) {
@@ -2051,7 +2087,7 @@ async function loadSelectedSong() {
   await hitSoundPlayer.preload();
   launchIntro.phase = "ready";
   launchIntro.progress = 0;
-  loadChart(chart);
+  await loadChart(chart, chartEntry.effectModules);
   setFreeCamera(false);
   document.documentElement.classList.remove("song-launch-loading");
   gameplayAudio.src = manifest.audioUrl;
@@ -2158,11 +2194,27 @@ function createDemoChart() {
   };
 }
 
+function makeConnectionGeometry() {
+  const geometry = new THREE.BufferGeometry();
+  const position = new THREE.BufferAttribute(new Float32Array(12), 3);
+  const lineColor = new THREE.BufferAttribute(new Float32Array(12), 3);
+  const lineAlpha = new THREE.BufferAttribute(new Float32Array(4), 1);
+  position.setUsage(THREE.DynamicDrawUsage);
+  lineColor.setUsage(THREE.DynamicDrawUsage);
+  lineAlpha.setUsage(THREE.DynamicDrawUsage);
+  geometry.setAttribute("position", position);
+  geometry.setAttribute("lineColor", lineColor);
+  geometry.setAttribute("lineAlpha", lineAlpha);
+  geometry.setIndex([0, 1, 2, 1, 3, 2]);
+  return geometry;
+}
+
 function acquireLine() {
   const line = new THREE.Mesh(
-    new THREE.BufferGeometry(),
+    makeConnectionGeometry(),
     makeGradientLineMaterial()
   );
+  line.frustumCulled = false;
   notesRoot.add(line);
   linePool.push(line);
   return line;
@@ -2662,7 +2714,7 @@ if (editorPreviewMode) {
         target: controls.target.clone()
       } : null;
       setEditorPreviewTime(event.data.time);
-      loadChart(event.data.chart);
+      loadChart(event.data.chart, event.data.effectModules);
       if (freeCameraState) {
         editorPreviewView = "free";
         scene.fog = null;
@@ -3397,7 +3449,8 @@ function updateSpaceSatellites(note, t, opacity) {
 }
 
 function updateHoldNoteVisual(note, segment, opacity, t, chartTime) {
-  const { head, bodyParticles } = note.mesh.userData;
+  const { head, bodyParticles, bodyMesh } = note.mesh.userData;
+  const holdAlpha = bodyMesh.geometry.attributes.holdAlpha;
   const start = segment.head.position;
   const end = segment.tail.position;
   const holdTrajectory = note.holdTrajectory;
@@ -3428,9 +3481,10 @@ function updateHoldNoteVisual(note, segment, opacity, t, chartTime) {
     head.quaternion.copy(segment.head.quaternion ?? note.zone.noteQuaternion);
   }
 
+  let visibleParticleCount = 0;
   bodyParticles.forEach((particle, index) => {
     if (opacity <= 0.02 || (holdTrajectory ? remainingTrajectoryTime <= 0.002 : straightLength <= 0.05)) {
-      particle.visible = false;
+      holdAlpha.setX(index, 0);
       return;
     }
     let u;
@@ -3442,7 +3496,7 @@ function updateHoldNoteVisual(note, segment, opacity, t, chartTime) {
         || pathTime < trajectoryStartTime
         || pathTime > trajectoryEndTime
       ) {
-        particle.visible = false;
+        holdAlpha.setX(index, 0);
         return;
       }
       u = THREE.MathUtils.clamp(
@@ -3456,7 +3510,7 @@ function updateHoldNoteVisual(note, segment, opacity, t, chartTime) {
         Math.max(1, Math.ceil(straightLength * renderConfig.holdParticlesPerUnit))
       );
       if (index >= activeParticleCount) {
-        particle.visible = false;
+        holdAlpha.setX(index, 0);
         return;
       }
       u = (index + 0.5) / activeParticleCount;
@@ -3482,13 +3536,22 @@ function updateHoldNoteVisual(note, segment, opacity, t, chartTime) {
       .addScaledVector(axisA, Math.cos(angle) * radial)
       .addScaledVector(axisB, Math.sin(angle) * radial);
 
-    particle.position.copy(position);
-    particle.quaternion.copy(camera.quaternion);
-    particle.rotateZ(angle + particle.userData.spin);
-    particle.scale.setScalar(particle.userData.scale);
-    particle.material.opacity = localOpacity;
-    particle.visible = localOpacity > 0.02;
+    if (localOpacity <= 0.02) {
+      holdAlpha.setX(index, 0);
+      return;
+    }
+    holdParticleTransform.position.copy(position);
+    holdParticleTransform.quaternion.copy(camera.quaternion);
+    holdParticleTransform.rotateZ(angle + particle.userData.spin);
+    holdParticleTransform.scale.setScalar(particle.userData.scale);
+    holdParticleTransform.updateMatrix();
+    bodyMesh.setMatrixAt(index, holdParticleTransform.matrix);
+    holdAlpha.setX(index, localOpacity);
+    visibleParticleCount += 1;
   });
+  bodyMesh.visible = visibleParticleCount > 0;
+  bodyMesh.instanceMatrix.needsUpdate = visibleParticleCount > 0;
+  holdAlpha.needsUpdate = true;
 
   const hitFlash = head.userData.hitFlash ?? 0;
   const headOpacity = opacity * capturedNoteVisibility(note, chartTime);
@@ -3504,7 +3567,14 @@ function updateNotes(t, chartTime) {
   const visibleNotes = [];
   const introOpacity = launchNoteOpacity(t);
   const lookAhead = Math.max(0, evaluateTimeline(chartState.lookAheadTimeline, chartTime));
+  const appearanceWindow = Math.max(CHART_TIME_STEP_SECONDS, lookAhead);
   notes.forEach((note) => {
+    const noteEndTime = isHoldNote(note) ? note.endTime : note.hitTime;
+    if (note.hitTime - chartTime > appearanceWindow
+      || noteEndTime - chartTime <= -timingConfig.postHitFadeSeconds) {
+      note.mesh.visible = false;
+      return;
+    }
     if (isHoldNote(note)) {
       const segment = holdSegment(note, chartTime, lookAhead);
       const opacity = introOpacity * note.mesh.userData.baseOpacity
@@ -3592,47 +3662,43 @@ function updateLandingHints(visibleNotes) {
   });
 }
 
+const connectionDelta = new THREE.Vector3();
+const connectionMidpoint = new THREE.Vector3();
+const connectionViewDirection = new THREE.Vector3();
+const connectionSide = new THREE.Vector3();
+
 function writeConnectionGeometry(line, a, b, color, opacityScale, opacityOverride = null) {
   const start = a.connectionPosition ?? a.note.mesh.position;
   const end = b.connectionPosition ?? b.note.mesh.position;
-  const delta = end.clone().sub(start);
-  if (delta.length() <= 0.001) return false;
+  connectionDelta.subVectors(end, start);
+  if (connectionDelta.length() <= 0.001) return false;
 
-  const midpoint = start.clone().add(end).multiplyScalar(0.5);
-  const cameraDistance = camera.position.distanceTo(midpoint);
+  connectionMidpoint.addVectors(start, end).multiplyScalar(0.5);
+  const cameraDistance = camera.position.distanceTo(connectionMidpoint);
   const distanceScale = Math.max(1, cameraDistance / renderConfig.connectionReferenceDistance);
-  const viewDirection = camera.position.clone().sub(midpoint).normalize();
-  const side = delta.clone().cross(viewDirection).normalize()
+  connectionViewDirection.subVectors(camera.position, connectionMidpoint).normalize();
+  connectionSide.copy(connectionDelta).cross(connectionViewDirection).normalize()
     .multiplyScalar(renderConfig.multiHitLineWidth * distanceScale * 0.5);
-  const positions = [];
-  const colors = [];
-  const alphas = [];
-  const indices = [];
-  const segmentCount = 1;
 
-  for (let i = 0; i <= segmentCount; i += 1) {
-    const u = i / segmentCount;
-    const point = start.clone().lerp(end, u);
-    const alpha = (opacityOverride ?? THREE.MathUtils.lerp(a.opacity, b.opacity, u)) * opacityScale;
-    positions.push(
-      point.x + side.x, point.y + side.y, point.z + side.z,
-      point.x - side.x, point.y - side.y, point.z - side.z
-    );
-    colors.push(color.r, color.g, color.b, color.r, color.g, color.b);
-    alphas.push(alpha, alpha);
-  }
+  const position = line.geometry.attributes.position;
+  position.setXYZ(0, start.x + connectionSide.x, start.y + connectionSide.y, start.z + connectionSide.z);
+  position.setXYZ(1, start.x - connectionSide.x, start.y - connectionSide.y, start.z - connectionSide.z);
+  position.setXYZ(2, end.x + connectionSide.x, end.y + connectionSide.y, end.z + connectionSide.z);
+  position.setXYZ(3, end.x - connectionSide.x, end.y - connectionSide.y, end.z - connectionSide.z);
+  position.needsUpdate = true;
 
-  for (let i = 0; i < segmentCount; i += 1) {
-    const base = i * 2;
-    indices.push(base, base + 1, base + 2, base + 1, base + 3, base + 2);
-  }
+  const lineColor = line.geometry.attributes.lineColor;
+  for (let index = 0; index < 4; index += 1) lineColor.setXYZ(index, color.r, color.g, color.b);
+  lineColor.needsUpdate = true;
 
-  line.geometry.dispose();
-  line.geometry = new THREE.BufferGeometry();
-  line.geometry.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
-  line.geometry.setAttribute("lineColor", new THREE.Float32BufferAttribute(colors, 3));
-  line.geometry.setAttribute("lineAlpha", new THREE.Float32BufferAttribute(alphas, 1));
-  line.geometry.setIndex(indices);
+  const startAlpha = (opacityOverride ?? a.opacity) * opacityScale;
+  const endAlpha = (opacityOverride ?? b.opacity) * opacityScale;
+  const lineAlpha = line.geometry.attributes.lineAlpha;
+  lineAlpha.setX(0, startAlpha);
+  lineAlpha.setX(1, startAlpha);
+  lineAlpha.setX(2, endAlpha);
+  lineAlpha.setX(3, endAlpha);
+  lineAlpha.needsUpdate = true;
   line.visible = true;
   return true;
 }
@@ -3782,6 +3848,7 @@ function animate() {
     controls.target.copy(target);
   }
   updateEditorCameraGuide(t, slowBeat);
+  chartEffectRuntime.update(chartState.chartTime);
   postEditorPreviewCamera(t);
   updateCameraDebug();
   updateReceiver(t, beat);
